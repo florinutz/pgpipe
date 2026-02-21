@@ -1,0 +1,111 @@
+package cmd
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"strings"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+)
+
+var cfgFile string
+
+var rootCmd = &cobra.Command{
+	Use:   "pgpipe",
+	Short: "Stream PostgreSQL changes to webhooks, SSE, and stdout",
+	Long: `pgpipe listens for PostgreSQL LISTEN/NOTIFY events and fans them out
+to one or more adapters: stdout (JSON lines), webhook (HTTP POST), or
+SSE (Server-Sent Events).`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return setupLogger()
+	},
+	SilenceUsage: true,
+}
+
+// Execute is called by main.go and is the entry point for the CLI.
+func Execute() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func init() {
+	cobra.OnInitialize(initConfig)
+
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ./pgpipe.yaml)")
+	rootCmd.PersistentFlags().String("log-level", "info", "log level: debug, info, warn, error")
+	rootCmd.PersistentFlags().String("log-format", "text", "log format: text, json")
+
+	mustBindPFlag("log_level", rootCmd.PersistentFlags().Lookup("log-level"))
+	mustBindPFlag("log_format", rootCmd.PersistentFlags().Lookup("log-format"))
+
+	rootCmd.AddCommand(listenCmd)
+	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(versionCmd)
+}
+
+func initConfig() {
+	if cfgFile != "" {
+		viper.SetConfigFile(cfgFile)
+	} else {
+		viper.SetConfigName("pgpipe")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath(".")
+	}
+
+	viper.SetEnvPrefix("PGPIPE")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	viper.AutomaticEnv()
+
+	if err := viper.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			// Only warn if a config file was explicitly specified but could not be read.
+			if cfgFile != "" {
+				fmt.Fprintf(os.Stderr, "Warning: could not read config file: %v\n", err)
+			}
+		}
+	}
+}
+
+func setupLogger() error {
+	level := viper.GetString("log_level")
+	format := viper.GetString("log_format")
+
+	var slogLevel slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		slogLevel = slog.LevelDebug
+	case "info":
+		slogLevel = slog.LevelInfo
+	case "warn":
+		slogLevel = slog.LevelWarn
+	case "error":
+		slogLevel = slog.LevelError
+	default:
+		return fmt.Errorf("unknown log level: %q (expected debug, info, warn, error)", level)
+	}
+
+	opts := &slog.HandlerOptions{Level: slogLevel}
+
+	var handler slog.Handler
+	switch strings.ToLower(format) {
+	case "text":
+		handler = slog.NewTextHandler(os.Stderr, opts)
+	case "json":
+		handler = slog.NewJSONHandler(os.Stderr, opts)
+	default:
+		return fmt.Errorf("unknown log format: %q (expected text, json)", format)
+	}
+
+	slog.SetDefault(slog.New(handler))
+	return nil
+}
+
+func mustBindPFlag(key string, flag *pflag.Flag) {
+	if err := viper.BindPFlag(key, flag); err != nil {
+		panic(fmt.Sprintf("viper.BindPFlag(%q): %v", key, err))
+	}
+}
