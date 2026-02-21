@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pgpipe
+      POSTGRES_PASSWORD: pgpipe
+      POSTGRES_DB: pgpipe
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pgpipe"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pgpipe:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    command:
+      - listen
+      - --db=postgres://pgpipe:pgpipe@postgres:5432/pgpipe?sslmode=disable
+      - --channel=pgpipe:orders
+      - --adapter=stdout
+    depends_on:
+      postgres:
+        condition: service_healthy

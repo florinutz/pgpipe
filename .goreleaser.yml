@@ -1,0 +1,54 @@
+version: 2
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/florinutz/pgpipe/cmd.Version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+dockers:
+  - image_templates:
+      - "ghcr.io/florinutz/pgpipe:{{ .Version }}-amd64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    dockerfile: Dockerfile
+    goarch: amd64
+  - image_templates:
+      - "ghcr.io/florinutz/pgpipe:{{ .Version }}-arm64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    dockerfile: Dockerfile
+    goarch: arm64
+
+docker_manifests:
+  - name_template: "ghcr.io/florinutz/pgpipe:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/florinutz/pgpipe:{{ .Version }}-amd64"
+      - "ghcr.io/florinutz/pgpipe:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/florinutz/pgpipe:latest"
+    image_templates:
+      - "ghcr.io/florinutz/pgpipe:{{ .Version }}-amd64"
+      - "ghcr.io/florinutz/pgpipe:{{ .Version }}-arm64"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"

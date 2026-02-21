@@ -1,0 +1,13 @@
+.git
+dist
+scenarios
+testutil
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+coverage.out
+pgpipe
+pgpipe.yaml
+.claude

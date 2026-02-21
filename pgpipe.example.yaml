@@ -1,0 +1,39 @@
+database_url: postgres://user:pass@localhost:5432/mydb
+channels:
+  - pgpipe:orders
+  - pgpipe:users
+
+adapters:
+  - stdout
+  - webhook
+
+log_level: info
+log_format: text
+
+shutdown_timeout: 5s
+# metrics_addr: ":9090"  # standalone metrics/health server (optional)
+
+bus:
+  buffer_size: 1024
+
+detector:
+  backoff_base: 5s
+  backoff_cap: 60s
+
+webhook:
+  url: https://example.com/webhook
+  headers:
+    Authorization: "Bearer token123"
+  signing_key: "my-secret-key"
+  max_retries: 5
+  timeout: 10s
+  backoff_base: 1s
+  backoff_cap: 32s
+
+sse:
+  addr: ":8080"
+  cors_origins:
+    - "*"
+  heartbeat_interval: 15s
+  read_timeout: 5s
+  idle_timeout: 120s
