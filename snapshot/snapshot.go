@@ -16,11 +16,12 @@ const source = "snapshot"
 
 // Snapshot exports existing rows from a table as SNAPSHOT events.
 type Snapshot struct {
-	dbURL     string
-	table     string
-	where     string
-	batchSize int
-	logger    *slog.Logger
+	dbURL        string
+	table        string
+	where        string
+	batchSize    int
+	snapshotName string // if set, use SET TRANSACTION SNAPSHOT for consistent reads
+	logger       *slog.Logger
 }
 
 // New creates a Snapshot. batchSize controls how many rows are buffered
@@ -39,6 +40,12 @@ func New(dbURL, table, where string, batchSize int, logger *slog.Logger) *Snapsh
 		batchSize: batchSize,
 		logger:    logger.With("component", "snapshot"),
 	}
+}
+
+// SetSnapshotName sets an exported snapshot name (from CREATE_REPLICATION_SLOT)
+// to use with SET TRANSACTION SNAPSHOT for zero-gap snapshot-first workflows.
+func (s *Snapshot) SetSnapshotName(name string) {
+	s.snapshotName = name
 }
 
 // Run exports all rows from the table as SNAPSHOT events to the events channel.
@@ -65,6 +72,16 @@ func (s *Snapshot) Run(ctx context.Context, events chan<- event.Event) error {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// If a snapshot name is provided (from a replication slot for snapshot-first),
+	// import it to see exactly the same data state as the slot's consistent point.
+	// SET TRANSACTION SNAPSHOT requires a string literal, not a parameter.
+	// The name comes from PostgreSQL's CREATE_REPLICATION_SLOT, not user input.
+	if s.snapshotName != "" {
+		if _, err := tx.Exec(ctx, "SET TRANSACTION SNAPSHOT '"+s.snapshotName+"'"); err != nil {
+			return fmt.Errorf("set transaction snapshot: %w", err)
+		}
+	}
 
 	channel := "pgcdc:" + s.table
 
