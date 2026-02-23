@@ -6,10 +6,10 @@ import (
 )
 
 var (
-	EventsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+	EventsReceived = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "pgpipe_events_received_total",
 		Help: "Total number of events received by the bus.",
-	}, []string{"channel"})
+	})
 
 	EventsDelivered = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "pgpipe_events_delivered_total",

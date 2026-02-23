@@ -85,7 +85,7 @@ func (b *Bus) Start(ctx context.Context) error {
 			b.mu.Unlock()
 			return ctx.Err()
 		case ev := <-b.ingest:
-			metrics.EventsReceived.WithLabelValues(ev.Channel).Inc()
+			metrics.EventsReceived.Inc()
 			b.mu.RLock()
 			for _, sub := range b.subscribers {
 				select {

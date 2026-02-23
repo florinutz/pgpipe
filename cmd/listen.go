@@ -150,7 +150,9 @@ func runListen(cmd *cobra.Command, args []string) error {
 	if hasExec && cfg.Exec.Command == "" {
 		return fmt.Errorf("exec adapter requires a command; use --exec-command or set exec.command in config")
 	}
-	_ = hasPGTable // validated via config defaults
+	if hasPGTable && cfg.PGTable.URL == "" && cfg.DatabaseURL == "" {
+		return fmt.Errorf("pg_table adapter requires a database URL; use --db or --pg-table-url")
+	}
 
 	logger := slog.Default()
 

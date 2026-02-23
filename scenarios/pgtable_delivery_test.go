@@ -51,6 +51,57 @@ func TestScenario_PGTableDelivery(t *testing.T) {
 		}
 	})
 
+	t.Run("constraint violation skipped", func(t *testing.T) {
+		tableName := "pgpipe_events_check"
+		createEventsTable(t, connStr, tableName)
+
+		// Add a CHECK constraint that rejects a specific channel.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, connStr)
+		if err != nil {
+			t.Fatalf("connect for ALTER: %v", err)
+		}
+		alterSQL := fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT reject_check CHECK (channel != 'pgtable_reject')",
+			pgx.Identifier{tableName}.Sanitize())
+		if _, err := conn.Exec(ctx, alterSQL); err != nil {
+			t.Fatalf("ALTER TABLE: %v", err)
+		}
+		conn.Close(ctx)
+
+		pa := pgtable.New(connStr, tableName, 0, 0, testLogger())
+		startPipeline(t, connStr, []string{"pgtable_reject", "pgtable_ok"}, pa)
+
+		time.Sleep(500 * time.Millisecond)
+
+		// Event on rejected channel: INSERT will fail (CHECK violation), adapter should skip.
+		sendNotify(t, connStr, "pgtable_reject", `{"n":1}`)
+		time.Sleep(500 * time.Millisecond)
+
+		// Event on OK channel: INSERT should succeed.
+		sendNotify(t, connStr, "pgtable_ok", `{"n":2}`)
+
+		// Poll for the row.
+		deadline := time.Now().Add(5 * time.Second)
+		var count int
+		for time.Now().Before(deadline) {
+			count = countEventsRows(t, connStr, tableName)
+			if count > 0 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		if count != 1 {
+			t.Fatalf("expected exactly 1 row, got %d", count)
+		}
+
+		row := queryFirstEventRow(t, connStr, tableName)
+		if row.channel != "pgtable_ok" {
+			t.Errorf("channel = %q, want pgtable_ok", row.channel)
+		}
+	})
+
 	t.Run("reconnect after disconnect", func(t *testing.T) {
 		tableName := "pgpipe_events_reconn"
 		createEventsTable(t, connStr, tableName)
@@ -111,7 +162,7 @@ func createEventsTable(t *testing.T, connStr, tableName string) {
 			source TEXT NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL
 		)
-	`, tableName)
+	`, pgx.Identifier{tableName}.Sanitize())
 	if _, err := conn.Exec(ctx, sql); err != nil {
 		t.Fatalf("createEventsTable: %v", err)
 	}
@@ -136,7 +187,7 @@ func countEventsRows(t *testing.T, connStr, tableName string) int {
 	defer conn.Close(ctx)
 
 	var count int
-	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)).Scan(&count)
+	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", pgx.Identifier{tableName}.Sanitize())).Scan(&count)
 	if err != nil {
 		t.Fatalf("countEventsRows: %v", err)
 	}
@@ -155,7 +206,7 @@ func queryFirstEventRow(t *testing.T, connStr, tableName string) eventRow {
 	defer conn.Close(ctx)
 
 	var row eventRow
-	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT id, channel, operation, source FROM %s LIMIT 1", tableName)).
+	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT id, channel, operation, source FROM %s LIMIT 1", pgx.Identifier{tableName}.Sanitize())).
 		Scan(&row.id, &row.channel, &row.operation, &row.source)
 	if err != nil {
 		t.Fatalf("queryFirstEventRow: %v", err)

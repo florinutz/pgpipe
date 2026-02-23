@@ -5,7 +5,7 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | # | Scenario | File | Proves | Failure Mode |
 |---|----------|------|--------|--------------|
 | 1 | Stdout delivery | `stdout_delivery_test.go` | pg_notify -> detector -> bus -> stdout adapter outputs correct JSON line | Malformed PG payload handled gracefully |
-| 2 | Webhook delivery | `webhook_delivery_test.go` | pg_notify -> detector -> bus -> webhook POST with correct headers + HMAC | Webhook returns 500, pgpipe retries and succeeds |
+| 2 | Webhook delivery | `webhook_delivery_test.go` | pg_notify -> detector -> bus -> webhook POST with correct headers + HMAC | Webhook returns 500, pgpipe retries and succeeds; all retries exhausted → event skipped, adapter continues |
 | 3 | SSE streaming | `sse_streaming_test.go` | pg_notify -> detector -> bus -> SSE broker -> HTTP client receives SSE-formatted event | Channel filter: client subscribing to "orders" doesn't see "users" events |
 | 4 | Multi-adapter fan-out | `multi_adapter_test.go` | Same pg_notify delivered to both stdout and webhook simultaneously | Slow webhook doesn't block stdout (backpressure) |
 | 5 | Detector reconnection | `reconnection_test.go` | LISTEN/NOTIFY detector recovers after PG connection is terminated mid-listen | Events resume flowing after reconnect |
@@ -15,7 +15,7 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | 9 | WAL replication | `wal_replication_test.go` | WAL logical replication captures INSERT/UPDATE/DELETE without triggers; events match LISTEN/NOTIFY format; tx metadata and markers work | UPDATE includes old row, DELETE includes deleted row, tx metadata shared across transaction, BEGIN/COMMIT markers wrap DML |
 | 10 | File delivery | `file_delivery_test.go` | pg_notify -> detector -> bus -> file adapter writes correct JSON lines to disk | File rotation: tiny MaxSize triggers .1 rotated file |
 | 11 | Exec delivery | `exec_delivery_test.go` | pg_notify -> detector -> bus -> exec adapter pipes JSON lines to subprocess stdin | Subprocess exit: process restarts and second event arrives |
-| 12 | PG table delivery | `pgtable_delivery_test.go` | pg_notify -> detector -> bus -> pg_table adapter INSERTs row into events table | Reconnect: adapter recovers after pg_terminate_backend |
+| 12 | PG table delivery | `pgtable_delivery_test.go` | pg_notify -> detector -> bus -> pg_table adapter INSERTs row into events table | Reconnect: adapter recovers after pg_terminate_backend; constraint violation → event skipped, no reconnect |
 | 13 | WS streaming | `ws_streaming_test.go` | pg_notify -> detector -> bus -> WS broker -> WebSocket client receives JSON message | Channel filter: /ws/orders only receives matching events |
 | 14 | WAL reconnection | `reconnection_test.go` | WAL detector recovers after PG connection is terminated mid-replication | Events resume flowing after WAL reconnect |
 
