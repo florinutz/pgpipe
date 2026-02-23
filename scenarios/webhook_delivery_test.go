@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,6 +83,43 @@ func TestScenario_WebhookDelivery(t *testing.T) {
 		var ev event.Event
 		if err := json.Unmarshal(req2.Body, &ev); err != nil {
 			t.Fatalf("invalid JSON body on retry: %v", err)
+		}
+		if ev.Operation != "INSERT" {
+			t.Errorf("operation = %q, want INSERT", ev.Operation)
+		}
+	})
+
+	t.Run("all retries exhausted", func(t *testing.T) {
+		// Always-500 receiver; use atomic flag to flip to 200 later.
+		var allow atomic.Bool
+		receiver := newWebhookReceiver(t, func(_ int) int {
+			if allow.Load() {
+				return http.StatusOK
+			}
+			return http.StatusInternalServerError
+		})
+		// maxRetries=2 with fast backoff so retries complete quickly.
+		a := webhook.New(receiver.Server.URL, nil, "", 2, 0, 50*time.Millisecond, 100*time.Millisecond, testLogger())
+
+		startPipeline(t, connStr, []string{"webhook_exhaust"}, a)
+		time.Sleep(1 * time.Second)
+
+		// Event 1: all retries will fail (2 attempts total for maxRetries=2).
+		sendNotify(t, connStr, "webhook_exhaust", `{"op":"INSERT","table":"orders","row":{"id":10}}`)
+
+		// Wait for 2 failed attempts.
+		_ = receiver.waitRequest(t, 5*time.Second)
+		_ = receiver.waitRequest(t, 5*time.Second)
+
+		// Flip receiver to 200 and send event 2.
+		allow.Store(true)
+		sendNotify(t, connStr, "webhook_exhaust", `{"op":"INSERT","table":"orders","row":{"id":11}}`)
+
+		// Event 2 should arrive successfully — adapter survived the exhaustion.
+		req := receiver.waitRequest(t, 10*time.Second)
+		var ev event.Event
+		if err := json.Unmarshal(req.Body, &ev); err != nil {
+			t.Fatalf("invalid JSON body after exhaustion: %v", err)
 		}
 		if ev.Operation != "INSERT" {
 			t.Errorf("operation = %q, want INSERT", ev.Operation)

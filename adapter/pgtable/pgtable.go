@@ -120,7 +120,8 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 
 			payloadStr := string(ev.Payload)
 			if !json.Valid(ev.Payload) {
-				payloadStr = `"` + payloadStr + `"`
+				escaped, _ := json.Marshal(payloadStr)
+				payloadStr = string(escaped)
 			}
 
 			_, err := conn.Exec(ctx, insertSQL,

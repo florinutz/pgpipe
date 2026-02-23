@@ -73,8 +73,7 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 				return nil
 			}
 			if err := a.enc.Encode(ev); err != nil {
-				a.logger.Error("failed to encode event", "event_id", ev.ID, "error", err)
-				continue
+				return fmt.Errorf("file adapter write: %w", err)
 			}
 			if err := a.f.Sync(); err != nil {
 				a.logger.Warn("failed to sync file", "error", err)
@@ -82,7 +81,7 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 			metrics.EventsDelivered.WithLabelValues("file").Inc()
 
 			if err := a.maybeRotate(); err != nil {
-				a.logger.Error("rotation failed", "error", err)
+				return fmt.Errorf("file adapter rotation: %w", err)
 			}
 		}
 	}
@@ -91,7 +90,7 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 func (a *Adapter) open() error {
 	f, err := os.OpenFile(a.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return err
+		return fmt.Errorf("open: %w", err)
 	}
 	a.f = f
 	a.enc = json.NewEncoder(f)

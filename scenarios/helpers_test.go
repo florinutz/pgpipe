@@ -155,11 +155,16 @@ func createTrigger(t *testing.T, connStr, table string) string {
 	}
 	defer conn.Close(ctx)
 
+	safeTable := pgx.Identifier{table}.Sanitize()
+	safeFuncName := pgx.Identifier{"pgpipe_notify_" + table}.Sanitize()
+	safeTriggerName := pgx.Identifier{"pgpipe_" + table + "_trigger"}.Sanitize()
+
 	sql := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, data JSONB DEFAULT '{}');
 
-		CREATE OR REPLACE FUNCTION pgpipe_notify_%s() RETURNS trigger AS $fn$
+		CREATE OR REPLACE FUNCTION %s() RETURNS trigger AS $fn$
 		BEGIN
+		  -- channel is a PL/pgSQL string literal, not a SQL identifier
 		  PERFORM pg_notify('%s', json_build_object(
 		    'op', TG_OP,
 		    'table', TG_TABLE_NAME,
@@ -170,10 +175,10 @@ func createTrigger(t *testing.T, connStr, table string) string {
 		END;
 		$fn$ LANGUAGE plpgsql;
 
-		CREATE OR REPLACE TRIGGER pgpipe_%s_trigger
+		CREATE OR REPLACE TRIGGER %s
 		  AFTER INSERT OR UPDATE OR DELETE ON %s
-		  FOR EACH ROW EXECUTE FUNCTION pgpipe_notify_%s();
-	`, table, table, channel, table, table, table)
+		  FOR EACH ROW EXECUTE FUNCTION %s();
+	`, safeTable, safeFuncName, channel, safeTriggerName, safeTable, safeFuncName)
 
 	_, err = conn.Exec(ctx, sql)
 	if err != nil {
@@ -196,7 +201,7 @@ func insertRow(t *testing.T, connStr, table string, data map[string]any) {
 	if err != nil {
 		t.Fatalf("insertRow marshal: %v", err)
 	}
-	_, err = conn.Exec(ctx, fmt.Sprintf("INSERT INTO %s (data) VALUES ($1)", table), jsonData)
+	_, err = conn.Exec(ctx, fmt.Sprintf("INSERT INTO %s (data) VALUES ($1)", pgx.Identifier{table}.Sanitize()), jsonData)
 	if err != nil {
 		t.Fatalf("insertRow: %v", err)
 	}
@@ -426,13 +431,14 @@ func createTable(t *testing.T, connStr, table string) {
 	}
 	defer conn.Close(ctx)
 
-	sql := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, data JSONB DEFAULT '{}')`, table)
+	safeTable := pgx.Identifier{table}.Sanitize()
+	sql := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, data JSONB DEFAULT '{}')`, safeTable)
 	if _, err := conn.Exec(ctx, sql); err != nil {
 		t.Fatalf("createTable: %v", err)
 	}
 
 	// Set REPLICA IDENTITY to FULL so UPDATE/DELETE include old row data.
-	identity := fmt.Sprintf(`ALTER TABLE %s REPLICA IDENTITY FULL`, table)
+	identity := fmt.Sprintf(`ALTER TABLE %s REPLICA IDENTITY FULL`, safeTable)
 	if _, err := conn.Exec(ctx, identity); err != nil {
 		t.Fatalf("createTable set replica identity: %v", err)
 	}
@@ -449,7 +455,7 @@ func createPublication(t *testing.T, connStr, pubName, table string) {
 	}
 	defer conn.Close(ctx)
 
-	sql := fmt.Sprintf(`CREATE PUBLICATION %s FOR TABLE %s`, pubName, table)
+	sql := fmt.Sprintf(`CREATE PUBLICATION %s FOR TABLE %s`, pgx.Identifier{pubName}.Sanitize(), pgx.Identifier{table}.Sanitize())
 	if _, err := conn.Exec(ctx, sql); err != nil {
 		t.Fatalf("createPublication: %v", err)
 	}
@@ -469,7 +475,7 @@ func updateRow(t *testing.T, connStr, table string, id int, data map[string]any)
 	if err != nil {
 		t.Fatalf("updateRow marshal: %v", err)
 	}
-	_, err = conn.Exec(ctx, fmt.Sprintf("UPDATE %s SET data = $1 WHERE id = $2", table), jsonData, id)
+	_, err = conn.Exec(ctx, fmt.Sprintf("UPDATE %s SET data = $1 WHERE id = $2", pgx.Identifier{table}.Sanitize()), jsonData, id)
 	if err != nil {
 		t.Fatalf("updateRow: %v", err)
 	}
@@ -495,7 +501,7 @@ func insertRowsInTx(t *testing.T, connStr, table string, rows []map[string]any) 
 		if err != nil {
 			t.Fatalf("insertRowsInTx marshal: %v", err)
 		}
-		_, err = tx.Exec(ctx, fmt.Sprintf("INSERT INTO %s (data) VALUES ($1)", table), jsonData)
+		_, err = tx.Exec(ctx, fmt.Sprintf("INSERT INTO %s (data) VALUES ($1)", pgx.Identifier{table}.Sanitize()), jsonData)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 			t.Fatalf("insertRowsInTx exec: %v", err)
@@ -516,7 +522,7 @@ func deleteRow(t *testing.T, connStr, table string, id int) {
 	}
 	defer conn.Close(ctx)
 
-	_, err = conn.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = $1", table), id)
+	_, err = conn.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = $1", pgx.Identifier{table}.Sanitize()), id)
 	if err != nil {
 		t.Fatalf("deleteRow: %v", err)
 	}

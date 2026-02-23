@@ -74,6 +74,9 @@ func NewPipeline(det detector.Detector, opts ...Option) *Pipeline {
 		p.health.Register("detector")
 		p.health.Register("bus")
 	}
+	for _, a := range p.adapters {
+		p.health.Register(a.Name())
+	}
 	p.bus = bus.New(p.busBuffer, p.logger)
 	return p
 }
@@ -108,6 +111,8 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 		g.Go(func() error {
 			p.logger.Info("adapter started", "adapter", a.Name())
+			p.health.SetStatus(a.Name(), health.StatusUp)
+			defer p.health.SetStatus(a.Name(), health.StatusDown)
 			return a.Start(gCtx, sub)
 		})
 	}

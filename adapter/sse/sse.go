@@ -194,7 +194,10 @@ func writeSSE(w io.Writer, ev event.Event) error {
 		return fmt.Errorf("marshal event %s: %w", ev.ID, err)
 	}
 	_, err = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", ev.ID, ev.Channel, data)
-	return err
+	if err != nil {
+		return fmt.Errorf("write sse: %w", err)
+	}
+	return nil
 }
 
 // channelKey is an unexported context key for passing the channel filter
