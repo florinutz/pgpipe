@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter/stdout"
-	"github.com/florinutz/pgpipe/event"
+	"github.com/florinutz/pgcdc/adapter/stdout"
+	"github.com/florinutz/pgcdc/event"
 )
 
 func TestScenario_Reconnection(t *testing.T) {
@@ -69,10 +69,10 @@ func TestScenario_WALReconnection(t *testing.T) {
 	connStr := startPostgres(t)
 
 	createTable(t, connStr, "wal_reconnect_orders")
-	createPublication(t, connStr, "pgpipe_wal_reconnect", "wal_reconnect_orders")
+	createPublication(t, connStr, "pgcdc_wal_reconnect", "wal_reconnect_orders")
 
 	capture := newLineCapture()
-	startWALPipeline(t, connStr, "pgpipe_wal_reconnect", stdout.New(capture, testLogger()))
+	startWALPipeline(t, connStr, "pgcdc_wal_reconnect", stdout.New(capture, testLogger()))
 
 	// Wait for replication slot setup.
 	time.Sleep(3 * time.Second)

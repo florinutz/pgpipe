@@ -1,4 +1,4 @@
-Add a new output adapter to pgpipe.
+Add a new output adapter to pgcdc.
 
 ## Steps
 

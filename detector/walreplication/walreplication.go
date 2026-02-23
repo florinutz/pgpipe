@@ -14,14 +14,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/internal/backoff"
-	"github.com/florinutz/pgpipe/pgpipeerr"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 )
 
 const (
 	source     = "wal_replication"
-	txnChannel = "pgpipe:_txn"
+	txnChannel = "pgcdc:_txn"
 )
 
 const (
@@ -95,7 +95,7 @@ func (d *Detector) Start(ctx context.Context, events chan<- event.Event) error {
 			return ctx.Err()
 		}
 
-		disconnErr := &pgpipeerr.DetectorDisconnectedError{
+		disconnErr := &pgcdcerr.DetectorDisconnectedError{
 			Source: source,
 			Err:    runErr,
 		}
@@ -387,13 +387,13 @@ func (d *Detector) emitMarker(ctx context.Context, events chan<- event.Event, op
 	return nil
 }
 
-// channelName returns the pgpipe channel name for a relation.
-// For non-public schemas: "pgpipe:<schema>.<table>", otherwise "pgpipe:<table>".
+// channelName returns the pgcdc channel name for a relation.
+// For non-public schemas: "pgcdc:<schema>.<table>", otherwise "pgcdc:<table>".
 func channelName(rel *pglogrepl.RelationMessage) string {
 	if rel.Namespace != "" && rel.Namespace != "public" {
-		return "pgpipe:" + rel.Namespace + "." + rel.RelationName
+		return "pgcdc:" + rel.Namespace + "." + rel.RelationName
 	}
-	return "pgpipe:" + rel.RelationName
+	return "pgcdc:" + rel.RelationName
 }
 
 // tupleToMap converts a WAL tuple into a map keyed by column name.
@@ -441,5 +441,5 @@ func randomSlotName() (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return "pgpipe_" + hex.EncodeToString(b), nil
+	return "pgcdc_" + hex.EncodeToString(b), nil
 }

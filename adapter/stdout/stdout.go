@@ -8,13 +8,13 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/metrics"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/metrics"
 )
 
 // Adapter writes events as JSON-lines to an io.Writer.
 // It is the simplest adapter, useful for debugging and unix piping
-// (e.g. pgpipe listen -c orders | jq .payload).
+// (e.g. pgcdc listen -c orders | jq .payload).
 type Adapter struct {
 	w      io.Writer
 	logger *slog.Logger

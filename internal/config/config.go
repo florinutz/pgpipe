@@ -18,6 +18,7 @@ type Config struct {
 	PGTable         PGTableConfig   `mapstructure:"pg_table"`
 	WebSocket       WebSocketConfig `mapstructure:"websocket"`
 	Detector        DetectorConfig  `mapstructure:"detector"`
+	Snapshot        SnapshotConfig  `mapstructure:"snapshot"`
 }
 
 type BusConfig struct {
@@ -65,6 +66,12 @@ type WebSocketConfig struct {
 	PingInterval time.Duration `mapstructure:"ping_interval"`
 }
 
+type SnapshotConfig struct {
+	Table     string `mapstructure:"table"`
+	Where     string `mapstructure:"where"`
+	BatchSize int    `mapstructure:"batch_size"`
+}
+
 type DetectorConfig struct {
 	Type        string        `mapstructure:"type"`
 	BackoffBase time.Duration `mapstructure:"backoff_base"`
@@ -107,12 +114,15 @@ func Default() Config {
 			BackoffCap:  30 * time.Second,
 		},
 		PGTable: PGTableConfig{
-			Table:       "pgpipe_events",
+			Table:       "pgcdc_events",
 			BackoffBase: 1 * time.Second,
 			BackoffCap:  30 * time.Second,
 		},
 		WebSocket: WebSocketConfig{
 			PingInterval: 15 * time.Second,
+		},
+		Snapshot: SnapshotConfig{
+			BatchSize: 1000,
 		},
 		Detector: DetectorConfig{
 			Type:        "listen_notify",

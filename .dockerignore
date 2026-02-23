@@ -8,6 +8,6 @@ testutil
 *.swo
 .DS_Store
 coverage.out
-pgpipe
-pgpipe.yaml
+pgcdc
+pgcdc.yaml
 .claude

@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/internal/backoff"
-	"github.com/florinutz/pgpipe/pgpipeerr"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -72,7 +72,7 @@ func (d *Detector) Start(ctx context.Context, events chan<- event.Event) error {
 			return ctx.Err()
 		}
 
-		disconnErr := &pgpipeerr.DetectorDisconnectedError{
+		disconnErr := &pgcdcerr.DetectorDisconnectedError{
 			Source: source,
 			Err:    runErr,
 		}

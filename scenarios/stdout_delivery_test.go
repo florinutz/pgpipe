@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter/stdout"
-	"github.com/florinutz/pgpipe/event"
+	"github.com/florinutz/pgcdc/adapter/stdout"
+	"github.com/florinutz/pgcdc/event"
 )
 
 func TestScenario_StdoutDelivery(t *testing.T) {

@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter"
-	"github.com/florinutz/pgpipe/bus"
-	"github.com/florinutz/pgpipe/detector/listennotify"
-	"github.com/florinutz/pgpipe/detector/walreplication"
+	"github.com/florinutz/pgcdc/adapter"
+	"github.com/florinutz/pgcdc/bus"
+	"github.com/florinutz/pgcdc/detector/listennotify"
+	"github.com/florinutz/pgcdc/detector/walreplication"
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -34,7 +34,7 @@ import (
 // Shared state set up once in TestMain.
 var (
 	testConnStr   string
-	pgpipeBinary  string
+	pgcdcBinary   string
 	testContainer testcontainers.Container
 )
 
@@ -46,9 +46,9 @@ func TestMain(m *testing.M) {
 		Image:        "postgres:16-alpine",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
-			"POSTGRES_USER":     "pgpipe",
-			"POSTGRES_PASSWORD": "pgpipe",
-			"POSTGRES_DB":       "pgpipe_test",
+			"POSTGRES_USER":     "pgcdc",
+			"POSTGRES_PASSWORD": "pgcdc",
+			"POSTGRES_DB":       "pgcdc_test",
 		},
 		Cmd: []string{
 			"postgres",
@@ -81,7 +81,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	testConnStr = fmt.Sprintf("postgres://pgpipe:pgpipe@%s:%s/pgpipe_test?sslmode=disable", host, port.Port())
+	testConnStr = fmt.Sprintf("postgres://pgcdc:pgcdc@%s:%s/pgcdc_test?sslmode=disable", host, port.Port())
 
 	// Verify connectivity.
 	conn, err := pgx.Connect(ctx, testConnStr)
@@ -91,18 +91,18 @@ func TestMain(m *testing.M) {
 	}
 	conn.Close(ctx)
 
-	// Build the pgpipe binary for CLI-based scenarios.
-	tmpDir, err := os.MkdirTemp("", "pgpipe-test-*")
+	// Build the pgcdc binary for CLI-based scenarios.
+	tmpDir, err := os.MkdirTemp("", "pgcdc-test-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create temp dir: %v\n", err)
 		os.Exit(1)
 	}
 
-	pgpipeBinary = filepath.Join(tmpDir, "pgpipe")
-	buildCmd := exec.Command("go", "build", "-o", pgpipeBinary, "github.com/florinutz/pgpipe/cmd/pgpipe")
+	pgcdcBinary = filepath.Join(tmpDir, "pgcdc")
+	buildCmd := exec.Command("go", "build", "-o", pgcdcBinary, "github.com/florinutz/pgcdc/cmd/pgcdc")
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "build pgpipe: %v\n", err)
+		fmt.Fprintf(os.Stderr, "build pgcdc: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -144,7 +144,7 @@ func sendNotify(t *testing.T, connStr, channel, payload string) {
 
 func createTrigger(t *testing.T, connStr, table string) string {
 	t.Helper()
-	channel := "pgpipe:" + table
+	channel := "pgcdc:" + table
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -156,8 +156,8 @@ func createTrigger(t *testing.T, connStr, table string) string {
 	defer conn.Close(ctx)
 
 	safeTable := pgx.Identifier{table}.Sanitize()
-	safeFuncName := pgx.Identifier{"pgpipe_notify_" + table}.Sanitize()
-	safeTriggerName := pgx.Identifier{"pgpipe_" + table + "_trigger"}.Sanitize()
+	safeFuncName := pgx.Identifier{"pgcdc_notify_" + table}.Sanitize()
+	safeTriggerName := pgx.Identifier{"pgcdc_" + table + "_trigger"}.Sanitize()
 
 	sql := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, data JSONB DEFAULT '{}');
@@ -223,8 +223,8 @@ func terminateBackends(t *testing.T, connStr string) {
 	}
 }
 
-func runPGPipe(args ...string) (string, error) {
-	cmd := exec.Command(pgpipeBinary, args...)
+func runPGCDC(args ...string) (string, error) {
+	cmd := exec.Command(pgcdcBinary, args...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

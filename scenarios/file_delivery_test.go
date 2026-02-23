@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	fileadapter "github.com/florinutz/pgpipe/adapter/file"
-	"github.com/florinutz/pgpipe/event"
+	fileadapter "github.com/florinutz/pgcdc/adapter/file"
+	"github.com/florinutz/pgcdc/event"
 )
 
 func TestScenario_FileDelivery(t *testing.T) {

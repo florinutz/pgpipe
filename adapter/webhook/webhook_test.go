@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter/webhook"
-	"github.com/florinutz/pgpipe/event"
+	"github.com/florinutz/pgcdc/adapter/webhook"
+	"github.com/florinutz/pgcdc/event"
 )
 
 func newTestLogger() *slog.Logger {
@@ -38,7 +38,7 @@ func TestHMACSigning(t *testing.T) {
 	var gotBody []byte
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotSig = r.Header.Get("X-PGPipe-Signature")
+		gotSig = r.Header.Get("X-PGCDC-Signature")
 		gotBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -61,7 +61,7 @@ func TestHMACSigning(t *testing.T) {
 	expectedSig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 
 	if gotSig != expectedSig {
-		t.Errorf("X-PGPipe-Signature = %q, want %q", gotSig, expectedSig)
+		t.Errorf("X-PGCDC-Signature = %q, want %q", gotSig, expectedSig)
 	}
 }
 
@@ -69,7 +69,7 @@ func TestHMACSigning_NotSetWhenNoKey(t *testing.T) {
 	var gotSig string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotSig = r.Header.Get("X-PGPipe-Signature")
+		gotSig = r.Header.Get("X-PGCDC-Signature")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -86,6 +86,6 @@ func TestHMACSigning_NotSetWhenNoKey(t *testing.T) {
 	}
 
 	if gotSig != "" {
-		t.Errorf("X-PGPipe-Signature should be empty when no signing key, got %q", gotSig)
+		t.Errorf("X-PGCDC-Signature should be empty when no signing key, got %q", gotSig)
 	}
 }

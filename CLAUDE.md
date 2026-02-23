@@ -1,4 +1,4 @@
-# pgpipe
+# pgcdc
 
 PostgreSQL change data capture (LISTEN/NOTIFY or WAL logical replication) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, and WebSockets.
 
@@ -6,7 +6,7 @@ PostgreSQL change data capture (LISTEN/NOTIFY or WAL logical replication) stream
 
 ```sh
 make build
-./pgpipe listen --db postgres://... --channel orders
+./pgcdc listen --db postgres://... --channel orders
 
 # Or via Docker
 make docker-build
@@ -19,7 +19,7 @@ docker compose up -d
 Signal (SIGINT/SIGTERM)
   |
   v
-Context ──> Pipeline (pgpipe.go orchestrates everything)
+Context ──> Pipeline (pgcdc.go orchestrates everything)
               |
   Detector ──> Bus (fan-out) ──> Adapter (stdout)
   (listennotify     |          ──> Adapter (webhook)
@@ -36,15 +36,15 @@ Context ──> Pipeline (pgpipe.go orchestrates everything)
 
 - **Concurrency**: `errgroup` manages all goroutines. One context cancellation tears everything down.
 - **Backpressure**: Bus uses non-blocking sends. If a subscriber channel is full, the event is dropped and a warning is logged. No adapter can block the pipeline.
-- **Transaction metadata**: WAL detector optionally enriches events with `transaction.xid`, `transaction.commit_time`, `transaction.seq` when `--tx-metadata` is enabled. `--tx-markers` adds synthetic BEGIN/COMMIT events on channel `pgpipe:_txn` (implies `--tx-metadata`). LISTEN/NOTIFY events omit this field (protocol has no tx info).
+- **Transaction metadata**: WAL detector optionally enriches events with `transaction.xid`, `transaction.commit_time`, `transaction.seq` when `--tx-metadata` is enabled. `--tx-markers` adds synthetic BEGIN/COMMIT events on channel `pgcdc:_txn` (implies `--tx-metadata`). LISTEN/NOTIFY events omit this field (protocol has no tx info).
 - **Shutdown**: Signal cancels root context. Bus closes subscriber channels. HTTP server gets `shutdown_timeout` (default 5s) `context.WithTimeout` for graceful drain.
-- **Wiring**: `pgpipe.go` provides the reusable `Pipeline` type (detector + bus + adapters). `cmd/listen.go` adds CLI-specific HTTP servers on top.
+- **Wiring**: `pgcdc.go` provides the reusable `Pipeline` type (detector + bus + adapters). `cmd/listen.go` adds CLI-specific HTTP servers on top.
 - **Observability**: Prometheus metrics exposed at `/metrics`. Rich health check at `/healthz` returns per-component status (200 when all up, 503 when any down). Standalone metrics server via `--metrics-addr`.
-- **Error types**: `pgpipeerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`) for `errors.Is`/`errors.As` matching.
+- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`) for `errors.Is`/`errors.As` matching.
 
 ## Code Conventions
 
-- **Error wrapping**: `fmt.Errorf("verb: %w", err)` — verb describes the failed action (`connect:`, `listen:`, `subscribe:`). Use typed errors from `pgpipeerr/` for errors that callers need to branch on.
+- **Error wrapping**: `fmt.Errorf("verb: %w", err)` — verb describes the failed action (`connect:`, `listen:`, `subscribe:`). Use typed errors from `pgcdcerr/` for errors that callers need to branch on.
 - **Logging**: `log/slog` only. Child loggers via `logger.With("component", name)`. Never `log` or `fmt.Printf`.
 - **Constructors**: `New()` on every type. Always handle nil logger: `if logger == nil { logger = slog.Default() }`. Duration params default to sensible values when zero.
 - **Channel direction**: Always `chan<-` or `<-chan` in function signatures. The bus owns channel lifecycle.
@@ -166,9 +166,9 @@ Target: ~8-20 scenarios for a project this size. If approaching 20, consolidate 
 ## Code Organization
 
 ```
-pgpipe.go       Pipeline type (library entry point)
+pgcdc.go       Pipeline type (library entry point)
 cmd/            CLI commands (cobra)
-  pgpipe/       Binary entry point (main.go)
+  pgcdc/       Binary entry point (main.go)
 adapter/        Output adapter interface + implementations
   stdout/       JSON-lines to io.Writer
   webhook/      HTTP POST with retries
@@ -178,13 +178,14 @@ adapter/        Output adapter interface + implementations
   pgtable/      INSERT into PostgreSQL table
   ws/           WebSocket broker
 bus/            Event fan-out
+snapshot/       Table snapshot (COPY-based row export)
 detector/       Change detection interface + implementations
   listennotify/ PostgreSQL LISTEN/NOTIFY
   walreplication/ PostgreSQL WAL logical replication
 event/          Event model
 health/         Component health checker
 metrics/        Prometheus metrics definitions
-pgpipeerr/      Typed error types
+pgcdcerr/      Typed error types
 internal/       CLI-specific internals (not importable)
   config/       Viper-based configuration structs
   server/       HTTP server for SSE + WS + metrics + health
@@ -194,8 +195,10 @@ testutil/       Test utilities
 
 ## Key Files
 
-- `pgpipe.go` — Pipeline type, options, Run method (library entry point)
+- `pgcdc.go` — Pipeline type, options, Run/RunSnapshot methods (library entry point)
 - `cmd/listen.go` — CLI wiring (uses Pipeline + CLI-specific HTTP servers)
+- `cmd/snapshot.go` — Snapshot CLI subcommand
+- `snapshot/snapshot.go` — Table snapshot using REPEATABLE READ + SELECT *
 - `adapter/adapter.go` — Adapter interface
 - `detector/detector.go` — Detector interface
 - `bus/bus.go` — Fan-out with non-blocking sends
@@ -203,6 +206,6 @@ testutil/       Test utilities
 - `event/event.go` — Event model (UUIDv7, JSON payload)
 - `health/health.go` — Component health checker
 - `metrics/metrics.go` — Prometheus metric definitions
-- `pgpipeerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError)
+- `pgcdcerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError)
 - `internal/server/server.go` — HTTP server with SSE, WS, metrics, and health endpoints (CLI-only)
 - `scenarios/helpers_test.go` — Shared test infrastructure (PG container, pipeline wiring)

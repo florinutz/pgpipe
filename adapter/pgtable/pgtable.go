@@ -7,14 +7,14 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/internal/backoff"
-	"github.com/florinutz/pgpipe/metrics"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/metrics"
 	"github.com/jackc/pgx/v5"
 )
 
 const (
-	defaultTable       = "pgpipe_events"
+	defaultTable       = "pgcdc_events"
 	defaultBackoffBase = 1 * time.Second
 	defaultBackoffCap  = 30 * time.Second
 )

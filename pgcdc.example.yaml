@@ -1,7 +1,7 @@
 database_url: postgres://user:pass@localhost:5432/mydb
 channels:
-  - pgpipe:orders
-  - pgpipe:users
+  - pgcdc:orders
+  - pgcdc:users
 
 adapters:
   - stdout
@@ -20,7 +20,7 @@ detector:
   type: listen_notify   # "listen_notify" (default) or "wal"
   backoff_base: 5s
   backoff_cap: 60s
-  # publication: pgpipe_orders  # required when type=wal (CREATE PUBLICATION name)
+  # publication: pgcdc_orders  # required when type=wal (CREATE PUBLICATION name)
   # tx_metadata: false          # include transaction metadata in WAL events (xid, commit_time, seq)
   # tx_markers: false           # emit BEGIN/COMMIT marker events (implies tx_metadata)
 
@@ -43,7 +43,7 @@ sse:
   idle_timeout: 120s
 
 file:
-  path: /var/log/pgpipe/events.jsonl
+  path: /var/log/pgcdc/events.jsonl
   max_size: 104857600  # 100 MB
   max_files: 5
 
@@ -54,7 +54,7 @@ exec:
 
 pg_table:
   # url: postgres://user:pass@localhost:5432/mydb  # defaults to database_url
-  table: pgpipe_events
+  table: pgcdc_events
   backoff_base: 1s
   backoff_cap: 30s
 

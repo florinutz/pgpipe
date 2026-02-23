@@ -14,9 +14,9 @@ import (
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:   "pgpipe",
+	Use:   "pgcdc",
 	Short: "Stream PostgreSQL changes to webhooks, SSE, and stdout",
-	Long: `pgpipe listens for PostgreSQL LISTEN/NOTIFY events and fans them out
+	Long: `pgcdc listens for PostgreSQL LISTEN/NOTIFY events and fans them out
 to one or more adapters: stdout (JSON lines), webhook (HTTP POST), or
 SSE (Server-Sent Events).`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -35,7 +35,7 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ./pgpipe.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ./pgcdc.yaml)")
 	rootCmd.PersistentFlags().String("log-level", "info", "log level: debug, info, warn, error")
 	rootCmd.PersistentFlags().String("log-format", "text", "log format: text, json")
 
@@ -51,12 +51,12 @@ func initConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
-		viper.SetConfigName("pgpipe")
+		viper.SetConfigName("pgcdc")
 		viper.SetConfigType("yaml")
 		viper.AddConfigPath(".")
 	}
 
-	viper.SetEnvPrefix("PGPIPE")
+	viper.SetEnvPrefix("PGCDC")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	viper.AutomaticEnv()
 

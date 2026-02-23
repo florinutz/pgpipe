@@ -1,5 +1,5 @@
 # Binary
-pgpipe
+pgcdc
 dist/
 
 # IDE
@@ -15,4 +15,4 @@ dist/
 coverage.out
 
 # Config with secrets
-pgpipe.yaml
+pgcdc.yaml

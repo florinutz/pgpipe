@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/metrics"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/metrics"
 )
 
 const (

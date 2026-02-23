@@ -1,4 +1,4 @@
-package pgpipeerr
+package pgcdcerr
 
 import (
 	"errors"

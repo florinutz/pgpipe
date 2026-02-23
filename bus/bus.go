@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/metrics"
-	"github.com/florinutz/pgpipe/pgpipeerr"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 )
 
 const defaultBufferSize = 1024
@@ -60,7 +60,7 @@ func (b *Bus) Subscribe(name string) (<-chan event.Event, error) {
 	defer b.mu.Unlock()
 	if b.closed {
 		close(ch)
-		return ch, pgpipeerr.ErrBusClosed
+		return ch, pgcdcerr.ErrBusClosed
 	}
 	b.subscribers = append(b.subscribers, subscriber{ch: ch, name: name})
 	metrics.BusSubscribers.Set(float64(len(b.subscribers)))

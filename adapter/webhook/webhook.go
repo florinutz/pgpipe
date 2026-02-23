@@ -13,10 +13,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/internal/backoff"
-	"github.com/florinutz/pgpipe/metrics"
-	"github.com/florinutz/pgpipe/pgpipeerr"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 )
 
 const (
@@ -24,7 +24,7 @@ const (
 	defaultBackoffBase = 1 * time.Second
 	defaultBackoffCap  = 32 * time.Second
 	defaultTimeout     = 10 * time.Second
-	userAgent          = "pgpipe/1.0"
+	userAgent          = "pgcdc/1.0"
 )
 
 // Adapter delivers events as HTTP POST requests to a webhook URL.
@@ -141,8 +141,8 @@ func (a *Adapter) deliver(ctx context.Context, ev event.Event) error {
 		// Standard headers.
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("X-PGPipe-Event-ID", ev.ID)
-		req.Header.Set("X-PGPipe-Channel", ev.Channel)
+		req.Header.Set("X-PGCDC-Event-ID", ev.ID)
+		req.Header.Set("X-PGCDC-Channel", ev.Channel)
 
 		// Custom headers from config.
 		for k, v := range a.headers {
@@ -154,7 +154,7 @@ func (a *Adapter) deliver(ctx context.Context, ev event.Event) error {
 			mac := hmac.New(sha256.New, []byte(a.signingKey))
 			mac.Write(body)
 			sig := hex.EncodeToString(mac.Sum(nil))
-			req.Header.Set("X-PGPipe-Signature", "sha256="+sig)
+			req.Header.Set("X-PGCDC-Signature", "sha256="+sig)
 		}
 
 		start := time.Now()
@@ -200,7 +200,7 @@ func (a *Adapter) deliver(ctx context.Context, ev event.Event) error {
 		return nil
 	}
 
-	return &pgpipeerr.WebhookDeliveryError{
+	return &pgcdcerr.WebhookDeliveryError{
 		EventID:    ev.ID,
 		URL:        a.url,
 		StatusCode: lastStatus,

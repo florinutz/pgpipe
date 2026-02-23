@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter/pgtable"
+	"github.com/florinutz/pgcdc/adapter/pgtable"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -16,7 +16,7 @@ func TestScenario_PGTableDelivery(t *testing.T) {
 	connStr := startPostgres(t)
 
 	t.Run("happy path", func(t *testing.T) {
-		tableName := "pgpipe_events_happy"
+		tableName := "pgcdc_events_happy"
 		createEventsTable(t, connStr, tableName)
 
 		pa := pgtable.New(connStr, tableName, 0, 0, testLogger())
@@ -52,7 +52,7 @@ func TestScenario_PGTableDelivery(t *testing.T) {
 	})
 
 	t.Run("constraint violation skipped", func(t *testing.T) {
-		tableName := "pgpipe_events_check"
+		tableName := "pgcdc_events_check"
 		createEventsTable(t, connStr, tableName)
 
 		// Add a CHECK constraint that rejects a specific channel.
@@ -103,7 +103,7 @@ func TestScenario_PGTableDelivery(t *testing.T) {
 	})
 
 	t.Run("reconnect after disconnect", func(t *testing.T) {
-		tableName := "pgpipe_events_reconn"
+		tableName := "pgcdc_events_reconn"
 		createEventsTable(t, connStr, tableName)
 
 		pa := pgtable.New(connStr, tableName, 100*time.Millisecond, 500*time.Millisecond, testLogger())

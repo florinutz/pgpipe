@@ -3,7 +3,7 @@ package detector
 import (
 	"context"
 
-	"github.com/florinutz/pgpipe/event"
+	"github.com/florinutz/pgcdc/event"
 )
 
 type Detector interface {

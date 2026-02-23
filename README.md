@@ -1,13 +1,13 @@
-# pgpipe
+# pgcdc
 
-[![CI](https://github.com/florinutz/pgpipe/actions/workflows/ci.yml/badge.svg)](https://github.com/florinutz/pgpipe/actions/workflows/ci.yml)
+[![CI](https://github.com/florinutz/pgcdc/actions/workflows/ci.yml/badge.svg)](https://github.com/florinutz/pgcdc/actions/workflows/ci.yml)
 
 Lightweight PostgreSQL Change Data Capture. No Kafka. No NATS. Just your PG and a single binary.
 
-pgpipe captures changes from PostgreSQL via LISTEN/NOTIFY or WAL logical replication and delivers them to webhooks, SSE streams, stdout, files, exec processes, PG tables, and WebSockets -- with zero external dependencies beyond PostgreSQL itself.
+pgcdc captures changes from PostgreSQL via LISTEN/NOTIFY or WAL logical replication and delivers them to webhooks, SSE streams, stdout, files, exec processes, PG tables, and WebSockets -- with zero external dependencies beyond PostgreSQL itself.
 
 ```
-PostgreSQL                    pgpipe (single binary)
+PostgreSQL                    pgcdc (single binary)
 ┌──────────┐    LISTEN   ┌─────────────┐     ┌───────────┐
 │  Table   │────────────▶│  Detector   │────▶│   Bus     │
 │  Trigger │  NOTIFY     │ (reconnect) │     │ (fan-out) │
@@ -31,29 +31,29 @@ PostgreSQL                    pgpipe (single binary)
 ### 1. Install
 
 ```bash
-go install github.com/florinutz/pgpipe@latest
+go install github.com/florinutz/pgcdc@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/florinutz/pgpipe.git
-cd pgpipe
+git clone https://github.com/florinutz/pgcdc.git
+cd pgcdc
 make build
 ```
 
 ### 2. Create a trigger on your table
 
 ```bash
-pgpipe init --table orders
+pgcdc init --table orders
 ```
 
 This prints SQL you can review and apply:
 
 ```sql
-CREATE OR REPLACE FUNCTION pgpipe_notify_orders() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION pgcdc_notify_orders() RETURNS trigger AS $$
 BEGIN
-  PERFORM pg_notify('pgpipe:orders', json_build_object(
+  PERFORM pg_notify('pgcdc:orders', json_build_object(
     'op', TG_OP,
     'table', TG_TABLE_NAME,
     'row', CASE WHEN TG_OP = 'DELETE' THEN row_to_json(OLD) ELSE row_to_json(NEW) END,
@@ -63,44 +63,61 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER pgpipe_orders_trigger
+CREATE TRIGGER pgcdc_orders_trigger
   AFTER INSERT OR UPDATE OR DELETE ON orders
-  FOR EACH ROW EXECUTE FUNCTION pgpipe_notify_orders();
+  FOR EACH ROW EXECUTE FUNCTION pgcdc_notify_orders();
 ```
 
 Apply it:
 
 ```bash
-pgpipe init --table orders | psql mydb
+pgcdc init --table orders | psql mydb
 ```
 
 ### 3. Start listening
 
 ```bash
 # stdout (JSON lines)
-pgpipe listen -c pgpipe:orders --db postgres://localhost:5432/mydb
+pgcdc listen -c pgcdc:orders --db postgres://localhost:5432/mydb
 
 # webhook
-pgpipe listen -c pgpipe:orders -a webhook -u https://example.com/hook --db postgres://...
+pgcdc listen -c pgcdc:orders -a webhook -u https://example.com/hook --db postgres://...
 
 # SSE server
-pgpipe listen -c pgpipe:orders -a sse --sse-addr :8080 --db postgres://...
+pgcdc listen -c pgcdc:orders -a sse --sse-addr :8080 --db postgres://...
 
 # file (JSON lines with rotation)
-pgpipe listen -c pgpipe:orders -a file --file-path /tmp/events.jsonl --db postgres://...
+pgcdc listen -c pgcdc:orders -a file --file-path /tmp/events.jsonl --db postgres://...
 
 # exec (pipe to any command)
-pgpipe listen -c pgpipe:orders -a exec --exec-command 'jq .payload' --db postgres://...
+pgcdc listen -c pgcdc:orders -a exec --exec-command 'jq .payload' --db postgres://...
 
 # pg_table (INSERT into a PostgreSQL table)
-pgpipe listen -c pgpipe:orders -a pg_table --pg-table-name audit_events --db postgres://...
+pgcdc listen -c pgcdc:orders -a pg_table --pg-table-name audit_events --db postgres://...
 
 # websocket
-pgpipe listen -c pgpipe:orders -a ws --sse-addr :8080 --db postgres://...
+pgcdc listen -c pgcdc:orders -a ws --sse-addr :8080 --db postgres://...
 
 # multiple adapters at once
-pgpipe listen -c pgpipe:orders -a stdout -a webhook -u https://example.com/hook --db postgres://...
+pgcdc listen -c pgcdc:orders -a stdout -a webhook -u https://example.com/hook --db postgres://...
 ```
+
+### Snapshot: Export Existing Data
+
+Capture all existing rows from a table as SNAPSHOT events, then pipe them through any adapter:
+
+```bash
+# Export all rows to stdout
+pgcdc snapshot --table orders --db postgres://localhost:5432/mydb
+
+# Export to a file
+pgcdc snapshot --table orders -a file --file-path /tmp/orders.jsonl --db postgres://...
+
+# Export with a WHERE filter
+pgcdc snapshot --table orders --where "created_at > '2025-01-01'" --db postgres://...
+```
+
+Snapshot events use the same `event.Event` format as live changes, with `operation: "SNAPSHOT"` and `source: "snapshot"`. All existing adapters work unchanged.
 
 ### Alternative: WAL Logical Replication
 
@@ -110,23 +127,23 @@ No triggers needed. Captures changes directly from the PostgreSQL write-ahead lo
 
 ```bash
 # 1. Generate publication SQL
-pgpipe init --table orders --detector wal
+pgcdc init --table orders --detector wal
 
 # 2. Apply it
-pgpipe init --table orders --detector wal | psql mydb
+pgcdc init --table orders --detector wal | psql mydb
 
 # 3. Start listening via WAL
-pgpipe listen --detector wal --publication pgpipe_orders --db postgres://localhost:5432/mydb
+pgcdc listen --detector wal --publication pgcdc_orders --db postgres://localhost:5432/mydb
 ```
 
-WAL replication events use the same format as LISTEN/NOTIFY (`channel: pgpipe:<table>`, same payload structure), so all adapters and SSE filtering work identically regardless of detector type.
+WAL replication events use the same format as LISTEN/NOTIFY (`channel: pgcdc:<table>`, same payload structure), so all adapters and SSE filtering work identically regardless of detector type.
 
 ### Transaction Metadata
 
 Enrich WAL events with transaction context:
 
 ```bash
-pgpipe listen --detector wal --publication pgpipe_orders --tx-metadata --db postgres://...
+pgcdc listen --detector wal --publication pgcdc_orders --tx-metadata --db postgres://...
 ```
 
 Each event includes a `transaction` field:
@@ -134,7 +151,7 @@ Each event includes a `transaction` field:
 ```json
 {
   "id": "...",
-  "channel": "pgpipe:orders",
+  "channel": "pgcdc:orders",
   "operation": "INSERT",
   "payload": {"op": "INSERT", "table": "orders", "row": {"id": 1}, "old": null},
   "source": "wal_replication",
@@ -154,34 +171,34 @@ Fields: `xid` (PostgreSQL transaction ID), `commit_time` (when the transaction c
 Wrap each transaction in synthetic BEGIN/COMMIT events:
 
 ```bash
-pgpipe listen --detector wal --publication pgpipe_orders --tx-markers --db postgres://...
+pgcdc listen --detector wal --publication pgcdc_orders --tx-markers --db postgres://...
 ```
 
 `--tx-markers` implies `--tx-metadata`. Output stream:
 
 ```json
-{"channel":"pgpipe:_txn","operation":"BEGIN","payload":{"xid":1234,"commit_time":"..."},...}
-{"channel":"pgpipe:orders","operation":"INSERT","transaction":{"xid":1234,"seq":1},...}
-{"channel":"pgpipe:orders","operation":"INSERT","transaction":{"xid":1234,"seq":2},...}
-{"channel":"pgpipe:_txn","operation":"COMMIT","payload":{"xid":1234,"event_count":2,"commit_time":"..."},...}
+{"channel":"pgcdc:_txn","operation":"BEGIN","payload":{"xid":1234,"commit_time":"..."},...}
+{"channel":"pgcdc:orders","operation":"INSERT","transaction":{"xid":1234,"seq":1},...}
+{"channel":"pgcdc:orders","operation":"INSERT","transaction":{"xid":1234,"seq":2},...}
+{"channel":"pgcdc:_txn","operation":"COMMIT","payload":{"xid":1234,"event_count":2,"commit_time":"..."},...}
 ```
 
-Marker events use channel `pgpipe:_txn` (underscore prefix signals synthetic/system events) and have no `transaction` field themselves. The COMMIT payload includes `event_count` for the number of DML events in the transaction.
+Marker events use channel `pgcdc:_txn` (underscore prefix signals synthetic/system events) and have no `transaction` field themselves. The COMMIT payload includes `event_count` for the number of DML events in the transaction.
 
 ## Configuration
 
-pgpipe supports three layers of configuration (highest priority wins):
+pgcdc supports three layers of configuration (highest priority wins):
 
 **CLI flags** > **environment variables** > **YAML config file** > **defaults**
 
 ### Config file
 
 ```yaml
-# pgpipe.yaml
+# pgcdc.yaml
 database_url: postgres://user:pass@localhost:5432/mydb
 channels:
-  - pgpipe:orders
-  - pgpipe:users
+  - pgcdc:orders
+  - pgcdc:users
 
 adapters:
   - stdout
@@ -207,7 +224,7 @@ sse:
   heartbeat_interval: 15s
 
 file:
-  path: /var/log/pgpipe/events.jsonl
+  path: /var/log/pgcdc/events.jsonl
   max_size: 104857600  # 100 MB
   max_files: 5
 
@@ -216,7 +233,7 @@ exec:
 
 pg_table:
   # url: postgres://...  # defaults to database_url
-  table: pgpipe_events
+  table: pgcdc_events
 
 websocket:
   ping_interval: 15s
@@ -224,12 +241,12 @@ websocket:
 
 ### Environment variables
 
-All config keys are available as environment variables with the `PGPIPE_` prefix:
+All config keys are available as environment variables with the `PGCDC_` prefix:
 
 ```bash
-export PGPIPE_DATABASE_URL=postgres://localhost:5432/mydb
-export PGPIPE_LOG_LEVEL=debug
-export PGPIPE_WEBHOOK_URL=https://example.com/hook
+export PGCDC_DATABASE_URL=postgres://localhost:5432/mydb
+export PGCDC_LOG_LEVEL=debug
+export PGCDC_WEBHOOK_URL=https://example.com/hook
 ```
 
 ## Adapters
@@ -239,7 +256,7 @@ export PGPIPE_WEBHOOK_URL=https://example.com/hook
 Outputs JSON lines to stdout. Pipe-friendly:
 
 ```bash
-pgpipe listen -c pgpipe:orders --db postgres://... | jq .payload
+pgcdc listen -c pgcdc:orders --db postgres://... | jq .payload
 ```
 
 ### webhook
@@ -248,10 +265,10 @@ HTTP POST with retries and optional HMAC signing.
 
 Headers on every request:
 - `Content-Type: application/json`
-- `User-Agent: pgpipe/1.0`
-- `X-PGPipe-Event-ID: <uuid>`
-- `X-PGPipe-Channel: <channel>`
-- `X-PGPipe-Signature: sha256=<hex>` (when signing key is set)
+- `User-Agent: pgcdc/1.0`
+- `X-PGCDC-Event-ID: <uuid>`
+- `X-PGCDC-Channel: <channel>`
+- `X-PGCDC-Signature: sha256=<hex>` (when signing key is set)
 
 Retry behavior:
 - Exponential backoff with full jitter (1s base, 32s cap)
@@ -277,7 +294,7 @@ Features:
 Writes events as JSON lines to a file with automatic rotation:
 
 ```bash
-pgpipe listen -c pgpipe:orders -a file --file-path /var/log/pgpipe/events.jsonl --db postgres://...
+pgcdc listen -c pgcdc:orders -a file --file-path /var/log/pgcdc/events.jsonl --db postgres://...
 ```
 
 Features:
@@ -290,12 +307,12 @@ Features:
 Pipes events as JSON lines to a long-running subprocess's stdin:
 
 ```bash
-pgpipe listen -c pgpipe:orders -a exec --exec-command 'jq .payload >> /tmp/payloads.jsonl' --db postgres://...
+pgcdc listen -c pgcdc:orders -a exec --exec-command 'jq .payload >> /tmp/payloads.jsonl' --db postgres://...
 ```
 
 Features:
 - Command runs via `sh -c`, so shell features (pipes, redirects) work
-- If the process exits, pgpipe restarts it with exponential backoff
+- If the process exits, pgcdc restarts it with exponential backoff
 - Failed events are re-delivered to the new process
 
 ### pg_table
@@ -304,14 +321,14 @@ Inserts events into a PostgreSQL table:
 
 ```bash
 # 1. Generate the CREATE TABLE SQL
-pgpipe init --table audit_events --adapter pg_table | psql mydb
+pgcdc init --table audit_events --adapter pg_table | psql mydb
 
 # 2. Start piping events to the table
-pgpipe listen -c pgpipe:orders -a pg_table --pg-table-name audit_events --db postgres://...
+pgcdc listen -c pgcdc:orders -a pg_table --pg-table-name audit_events --db postgres://...
 ```
 
 Features:
-- Table must pre-exist (use `pgpipe init --adapter pg_table` to generate SQL)
+- Table must pre-exist (use `pgcdc init --adapter pg_table` to generate SQL)
 - Uses `--pg-table-url` for a separate database, or falls back to `--db`
 - Automatic reconnection with backoff on connection loss
 - Non-connection errors (constraint violations) skip the event with a warning
@@ -324,7 +341,7 @@ Starts an HTTP server with WebSocket endpoints:
 - `GET /ws/{channel}` -- stream filtered by channel
 
 ```bash
-pgpipe listen -c pgpipe:orders -a ws --sse-addr :8080 --db postgres://...
+pgcdc listen -c pgcdc:orders -a ws --sse-addr :8080 --db postgres://...
 # Then: websocat ws://localhost:8080/ws
 ```
 
@@ -338,7 +355,7 @@ Features:
 ```json
 {
   "id": "019662a1-b2c3-7def-8901-234567890abc",
-  "channel": "pgpipe:orders",
+  "channel": "pgcdc:orders",
   "operation": "INSERT",
   "payload": {
     "op": "INSERT",
@@ -354,12 +371,12 @@ Features:
 ## CLI Reference
 
 ```
-pgpipe listen [flags]
+pgcdc listen [flags]
   -c, --channel strings        PG channels to listen on (repeatable)
   -a, --adapter strings        Adapters: stdout, webhook, sse, file, exec, pg_table, ws (default [stdout])
   -u, --url string             Webhook destination URL
       --sse-addr string        SSE/WS server address (default ":8080")
-      --db string              PostgreSQL connection string (env: PGPIPE_DATABASE_URL)
+      --db string              PostgreSQL connection string (env: PGCDC_DATABASE_URL)
       --retries int            Webhook max retries (default 5)
       --signing-key string     HMAC signing key for webhook
       --detector string        Detector type: listen_notify or wal (default "listen_notify")
@@ -372,22 +389,29 @@ pgpipe listen [flags]
       --file-max-files int     Number of rotated files to keep (default 5)
       --exec-command string    Shell command to pipe events to (via stdin)
       --pg-table-url string    PostgreSQL URL for pg_table adapter (default: same as --db)
-      --pg-table-name string   Destination table name (default: pgpipe_events)
+      --pg-table-name string   Destination table name (default: pgcdc_events)
       --ws-ping-interval dur   WebSocket ping interval (default 15s)
 
-pgpipe init [flags]
+pgcdc snapshot [flags]
+      --db string              PostgreSQL connection string
+      --table string           Table to snapshot (required)
+      --where string           Optional WHERE clause to filter rows
+      --batch-size int         Progress logging interval in rows (default 1000)
+  -a, --adapter strings        Adapters: stdout, webhook, file, exec, pg_table (default [stdout])
+
+pgcdc init [flags]
       --table string           Table name (required)
-      --channel string         Channel name (default: pgpipe:<table>)
+      --channel string         Channel name (default: pgcdc:<table>)
       --detector string        Detector type: listen_notify or wal (default "listen_notify")
-      --publication string     Publication name for WAL (default: pgpipe_<table>)
+      --publication string     Publication name for WAL (default: pgcdc_<table>)
       --adapter string         Adapter type: pg_table (generates events table SQL)
 
-pgpipe version
+pgcdc version
 ```
 
 Global flags:
 ```
-      --config string       Config file path (default: ./pgpipe.yaml)
+      --config string       Config file path (default: ./pgcdc.yaml)
       --log-level string    debug, info, warn, error (default "info")
       --log-format string   text, json (default "text")
 ```
@@ -398,7 +422,7 @@ Global flags:
 # Build the image
 make docker-build
 
-# Start postgres + pgpipe
+# Start postgres + pgcdc
 make docker-up
 
 # Stop
@@ -422,7 +446,7 @@ make clean          # remove build artifacts
 
 ## Design
 
-pgpipe is built around three core abstractions:
+pgcdc is built around three core abstractions:
 
 - **Detector** -- sources of change events (LISTEN/NOTIFY or WAL logical replication)
 - **Bus** -- fans out events from detectors to adapters via buffered Go channels

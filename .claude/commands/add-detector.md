@@ -1,4 +1,4 @@
-Add a new event source (detector) to pgpipe.
+Add a new event source (detector) to pgcdc.
 
 ## Steps
 

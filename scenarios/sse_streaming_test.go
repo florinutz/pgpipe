@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter/sse"
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/internal/server"
+	"github.com/florinutz/pgcdc/adapter/sse"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/internal/server"
 )
 
 func TestScenario_SSEStreaming(t *testing.T) {
