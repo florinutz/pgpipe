@@ -1,4 +1,4 @@
-module github.com/florinutz/pgpipe
+module github.com/florinutz/pgcdc
 
 go 1.25.7
 

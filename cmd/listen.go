@@ -9,19 +9,19 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/florinutz/pgpipe"
-	execadapter "github.com/florinutz/pgpipe/adapter/exec"
-	fileadapter "github.com/florinutz/pgpipe/adapter/file"
-	"github.com/florinutz/pgpipe/adapter/pgtable"
-	"github.com/florinutz/pgpipe/adapter/sse"
-	"github.com/florinutz/pgpipe/adapter/stdout"
-	"github.com/florinutz/pgpipe/adapter/webhook"
-	"github.com/florinutz/pgpipe/adapter/ws"
-	"github.com/florinutz/pgpipe/detector"
-	"github.com/florinutz/pgpipe/detector/listennotify"
-	"github.com/florinutz/pgpipe/detector/walreplication"
-	"github.com/florinutz/pgpipe/internal/config"
-	"github.com/florinutz/pgpipe/internal/server"
+	"github.com/florinutz/pgcdc"
+	execadapter "github.com/florinutz/pgcdc/adapter/exec"
+	fileadapter "github.com/florinutz/pgcdc/adapter/file"
+	"github.com/florinutz/pgcdc/adapter/pgtable"
+	"github.com/florinutz/pgcdc/adapter/sse"
+	"github.com/florinutz/pgcdc/adapter/stdout"
+	"github.com/florinutz/pgcdc/adapter/webhook"
+	"github.com/florinutz/pgcdc/adapter/ws"
+	"github.com/florinutz/pgcdc/detector"
+	"github.com/florinutz/pgcdc/detector/listennotify"
+	"github.com/florinutz/pgcdc/detector/walreplication"
+	"github.com/florinutz/pgcdc/internal/config"
+	"github.com/florinutz/pgcdc/internal/server"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
@@ -43,7 +43,7 @@ func init() {
 	f.StringSliceP("adapter", "a", []string{"stdout"}, "adapters: webhook, sse, stdout (repeatable)")
 	f.StringP("url", "u", "", "webhook destination URL")
 	f.String("sse-addr", ":8080", "SSE server listen address")
-	f.String("db", "", "PostgreSQL connection string (env: PGPIPE_DATABASE_URL)")
+	f.String("db", "", "PostgreSQL connection string (env: PGCDC_DATABASE_URL)")
 	f.Int("retries", 5, "webhook max retries")
 	f.String("signing-key", "", "HMAC signing key for webhook")
 	f.String("metrics-addr", "", "standalone metrics/health server address (e.g. :9090)")
@@ -62,7 +62,7 @@ func init() {
 
 	// PG table adapter flags.
 	f.String("pg-table-url", "", "PostgreSQL URL for pg_table adapter (default: same as --db)")
-	f.String("pg-table-name", "", "destination table name (default: pgpipe_events)")
+	f.String("pg-table-name", "", "destination table name (default: pgcdc_events)")
 
 	// WebSocket adapter flags.
 	f.Duration("ws-ping-interval", 0, "WebSocket ping interval (default 15s)")
@@ -105,7 +105,7 @@ func runListen(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--tx-metadata and --tx-markers require --detector wal")
 	}
 	if cfg.DatabaseURL == "" {
-		return fmt.Errorf("no database URL specified; use --db, set database_url in config, or export PGPIPE_DATABASE_URL")
+		return fmt.Errorf("no database URL specified; use --db, set database_url in config, or export PGCDC_DATABASE_URL")
 	}
 	if cfg.Detector.Type != "wal" && len(cfg.Channels) == 0 {
 		return fmt.Errorf("no channels specified; use --channel or set channels in config file")
@@ -172,9 +172,9 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build pipeline options.
-	opts := []pgpipe.Option{
-		pgpipe.WithBusBuffer(cfg.Bus.BufferSize),
-		pgpipe.WithLogger(logger),
+	opts := []pgcdc.Option{
+		pgcdc.WithBusBuffer(cfg.Bus.BufferSize),
+		pgcdc.WithLogger(logger),
 	}
 
 	// Create adapters.
@@ -183,9 +183,9 @@ func runListen(cmd *cobra.Command, args []string) error {
 	for _, name := range cfg.Adapters {
 		switch name {
 		case "stdout":
-			opts = append(opts, pgpipe.WithAdapter(stdout.New(nil, logger)))
+			opts = append(opts, pgcdc.WithAdapter(stdout.New(nil, logger)))
 		case "webhook":
-			opts = append(opts, pgpipe.WithAdapter(webhook.New(
+			opts = append(opts, pgcdc.WithAdapter(webhook.New(
 				cfg.Webhook.URL,
 				cfg.Webhook.Headers,
 				cfg.Webhook.SigningKey,
@@ -197,25 +197,25 @@ func runListen(cmd *cobra.Command, args []string) error {
 			)))
 		case "sse":
 			sseBroker = sse.New(cfg.Bus.BufferSize, cfg.SSE.HeartbeatInterval, logger)
-			opts = append(opts, pgpipe.WithAdapter(sseBroker))
+			opts = append(opts, pgcdc.WithAdapter(sseBroker))
 		case "file":
-			opts = append(opts, pgpipe.WithAdapter(fileadapter.New(cfg.File.Path, cfg.File.MaxSize, cfg.File.MaxFiles, logger)))
+			opts = append(opts, pgcdc.WithAdapter(fileadapter.New(cfg.File.Path, cfg.File.MaxSize, cfg.File.MaxFiles, logger)))
 		case "exec":
-			opts = append(opts, pgpipe.WithAdapter(execadapter.New(cfg.Exec.Command, cfg.Exec.BackoffBase, cfg.Exec.BackoffCap, logger)))
+			opts = append(opts, pgcdc.WithAdapter(execadapter.New(cfg.Exec.Command, cfg.Exec.BackoffBase, cfg.Exec.BackoffCap, logger)))
 		case "pg_table":
 			pgTableURL := cfg.PGTable.URL
 			if pgTableURL == "" {
 				pgTableURL = cfg.DatabaseURL
 			}
-			opts = append(opts, pgpipe.WithAdapter(pgtable.New(pgTableURL, cfg.PGTable.Table, cfg.PGTable.BackoffBase, cfg.PGTable.BackoffCap, logger)))
+			opts = append(opts, pgcdc.WithAdapter(pgtable.New(pgTableURL, cfg.PGTable.Table, cfg.PGTable.BackoffBase, cfg.PGTable.BackoffCap, logger)))
 		case "ws":
 			wsBroker = ws.New(cfg.Bus.BufferSize, cfg.WebSocket.PingInterval, logger)
-			opts = append(opts, pgpipe.WithAdapter(wsBroker))
+			opts = append(opts, pgcdc.WithAdapter(wsBroker))
 		}
 	}
 
 	// Build pipeline.
-	p := pgpipe.NewPipeline(det, opts...)
+	p := pgcdc.NewPipeline(det, opts...)
 
 	// Use an errgroup to run the pipeline alongside CLI-specific HTTP servers.
 	g, gCtx := errgroup.WithContext(ctx)

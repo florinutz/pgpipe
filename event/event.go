@@ -8,6 +8,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// Common operation constants.
+const (
+	OpSnapshot = "SNAPSHOT"
+)
+
 // TransactionInfo contains optional PostgreSQL transaction metadata.
 // Only populated by the WAL detector when --tx-metadata is enabled.
 type TransactionInfo struct {

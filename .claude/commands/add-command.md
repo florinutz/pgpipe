@@ -1,4 +1,4 @@
-Add a new CLI subcommand to pgpipe.
+Add a new CLI subcommand to pgcdc.
 
 ## Steps
 

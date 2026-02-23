@@ -17,9 +17,9 @@ func TestScenario_TriggerSQL(t *testing.T) {
 
 	t.Run("happy path", func(t *testing.T) {
 		// Generate trigger SQL using the CLI.
-		output, err := runPGPipe("init", "--table", "trigger_test_orders")
+		output, err := runPGCDC("init", "--table", "trigger_test_orders")
 		if err != nil {
-			t.Fatalf("pgpipe init: %v\noutput: %s", err, output)
+			t.Fatalf("pgcdc init: %v\noutput: %s", err, output)
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -44,7 +44,7 @@ func TestScenario_TriggerSQL(t *testing.T) {
 		}
 
 		// Subscribe to the notification channel.
-		_, err = conn.Exec(ctx, `LISTEN "pgpipe:trigger_test_orders"`)
+		_, err = conn.Exec(ctx, `LISTEN "pgcdc:trigger_test_orders"`)
 		if err != nil {
 			t.Fatalf("listen: %v", err)
 		}
@@ -61,8 +61,8 @@ func TestScenario_TriggerSQL(t *testing.T) {
 			t.Fatalf("wait for notification: %v", err)
 		}
 
-		if notification.Channel != "pgpipe:trigger_test_orders" {
-			t.Errorf("channel = %q, want %q", notification.Channel, "pgpipe:trigger_test_orders")
+		if notification.Channel != "pgcdc:trigger_test_orders" {
+			t.Errorf("channel = %q, want %q", notification.Channel, "pgcdc:trigger_test_orders")
 		}
 
 		var payload map[string]json.RawMessage
@@ -77,7 +77,7 @@ func TestScenario_TriggerSQL(t *testing.T) {
 	})
 
 	t.Run("invalid table name rejected", func(t *testing.T) {
-		output, err := runPGPipe("init", "--table", "123-invalid!")
+		output, err := runPGCDC("init", "--table", "123-invalid!")
 		if err == nil {
 			t.Fatal("expected error for invalid table name")
 		}
@@ -87,7 +87,7 @@ func TestScenario_TriggerSQL(t *testing.T) {
 	})
 
 	t.Run("invalid channel name rejected", func(t *testing.T) {
-		output, err := runPGPipe("init", "--table", "orders", "--channel", "bad channel!")
+		output, err := runPGCDC("init", "--table", "orders", "--channel", "bad channel!")
 		if err == nil {
 			t.Fatal("expected error for invalid channel name")
 		}

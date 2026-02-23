@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/florinutz/pgpipe/adapter/ws"
-	"github.com/florinutz/pgpipe/bus"
-	"github.com/florinutz/pgpipe/detector/listennotify"
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/internal/server"
+	"github.com/florinutz/pgcdc/adapter/ws"
+	"github.com/florinutz/pgcdc/bus"
+	"github.com/florinutz/pgcdc/detector/listennotify"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/internal/server"
 	"golang.org/x/sync/errgroup"
 )
 

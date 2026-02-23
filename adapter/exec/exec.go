@@ -8,10 +8,10 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/florinutz/pgpipe/event"
-	"github.com/florinutz/pgpipe/internal/backoff"
-	"github.com/florinutz/pgpipe/metrics"
-	"github.com/florinutz/pgpipe/pgpipeerr"
+	"github.com/florinutz/pgcdc/event"
+	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 )
 
 const (
@@ -90,11 +90,11 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event, pending **
 	cmd := exec.CommandContext(ctx, "sh", "-c", a.command)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return &pgpipeerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("stdin pipe: %w", err)}
+		return &pgcdcerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("stdin pipe: %w", err)}
 	}
 
 	if err := cmd.Start(); err != nil {
-		return &pgpipeerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("start: %w", err)}
+		return &pgcdcerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("start: %w", err)}
 	}
 
 	enc := json.NewEncoder(stdin)
@@ -104,7 +104,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event, pending **
 		if err := enc.Encode(*pending); err != nil {
 			_ = stdin.Close()
 			_ = cmd.Wait()
-			return &pgpipeerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("write pending: %w", err)}
+			return &pgcdcerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("write pending: %w", err)}
 		}
 		metrics.EventsDelivered.WithLabelValues("exec").Inc()
 		*pending = nil
@@ -123,7 +123,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event, pending **
 
 		case waitErr := <-waitCh:
 			// Process exited on its own.
-			return &pgpipeerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("exited: %w", waitErr)}
+			return &pgcdcerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("exited: %w", waitErr)}
 
 		case ev, ok := <-events:
 			if !ok {
@@ -135,7 +135,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event, pending **
 				*pending = &ev
 				_ = stdin.Close()
 				<-waitCh
-				return &pgpipeerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("write: %w", err)}
+				return &pgcdcerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("write: %w", err)}
 			}
 			metrics.EventsDelivered.WithLabelValues("exec").Inc()
 		}

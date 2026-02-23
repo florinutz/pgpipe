@@ -1,11 +1,11 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X github.com/florinutz/pgpipe/cmd.Version=$(VERSION)
+LDFLAGS := -s -w -X github.com/florinutz/pgcdc/cmd.Version=$(VERSION)
 
 .PHONY: build test test-scenarios test-all lint vet fmt coverage docker-build docker-up docker-down clean help
 
 ## build: Compile the binary
 build:
-	go build -ldflags "$(LDFLAGS)" -o pgpipe ./cmd/pgpipe
+	go build -ldflags "$(LDFLAGS)" -o pgcdc ./cmd/pgcdc
 
 ## test: Run unit tests only (fast, no Docker)
 test:
@@ -32,9 +32,9 @@ fmt:
 
 ## docker-build: Build Docker image
 docker-build:
-	docker build -t pgpipe:dev .
+	docker build -t pgcdc:dev .
 
-## docker-up: Start postgres + pgpipe via docker compose
+## docker-up: Start postgres + pgcdc via docker compose
 docker-up:
 	docker compose up -d
 
@@ -49,7 +49,7 @@ coverage:
 
 ## clean: Remove build artifacts
 clean:
-	rm -f pgpipe
+	rm -f pgcdc
 	rm -rf dist/
 
 ## help: Show this help

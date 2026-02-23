@@ -52,9 +52,9 @@ With --adapter pg_table, generates CREATE TABLE for the pg_table adapter.`,
 
 func init() {
 	initCmd.Flags().String("table", "", "table name (required)")
-	initCmd.Flags().String("channel", "", "channel name (default: pgpipe:<table>)")
+	initCmd.Flags().String("channel", "", "channel name (default: pgcdc:<table>)")
 	initCmd.Flags().String("detector", "listen_notify", "detector type: listen_notify or wal")
-	initCmd.Flags().String("publication", "", "publication name for WAL detector (default: pgpipe_<table>)")
+	initCmd.Flags().String("publication", "", "publication name for WAL detector (default: pgcdc_<table>)")
 	initCmd.Flags().String("adapter", "", "adapter type: pg_table (generates events table SQL)")
 	_ = initCmd.MarkFlagRequired("table")
 }
@@ -92,7 +92,7 @@ func runInitListenNotify(cmd *cobra.Command, table string) error {
 	channel, _ := cmd.Flags().GetString("channel")
 
 	if channel == "" {
-		channel = "pgpipe:" + table
+		channel = "pgcdc:" + table
 	}
 
 	if !validChannelName.MatchString(channel) {
@@ -124,7 +124,7 @@ func runInitListenNotify(cmd *cobra.Command, table string) error {
 func runInitWAL(cmd *cobra.Command, table string) error {
 	publication, _ := cmd.Flags().GetString("publication")
 	if publication == "" {
-		publication = "pgpipe_" + table
+		publication = "pgcdc_" + table
 	}
 
 	if !validPublicationName.MatchString(publication) {

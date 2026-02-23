@@ -5,12 +5,12 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | # | Scenario | File | Proves | Failure Mode |
 |---|----------|------|--------|--------------|
 | 1 | Stdout delivery | `stdout_delivery_test.go` | pg_notify -> detector -> bus -> stdout adapter outputs correct JSON line | Malformed PG payload handled gracefully |
-| 2 | Webhook delivery | `webhook_delivery_test.go` | pg_notify -> detector -> bus -> webhook POST with correct headers + HMAC | Webhook returns 500, pgpipe retries and succeeds; all retries exhausted → event skipped, adapter continues |
+| 2 | Webhook delivery | `webhook_delivery_test.go` | pg_notify -> detector -> bus -> webhook POST with correct headers + HMAC | Webhook returns 500, pgcdc retries and succeeds; all retries exhausted → event skipped, adapter continues |
 | 3 | SSE streaming | `sse_streaming_test.go` | pg_notify -> detector -> bus -> SSE broker -> HTTP client receives SSE-formatted event | Channel filter: client subscribing to "orders" doesn't see "users" events |
 | 4 | Multi-adapter fan-out | `multi_adapter_test.go` | Same pg_notify delivered to both stdout and webhook simultaneously | Slow webhook doesn't block stdout (backpressure) |
 | 5 | Detector reconnection | `reconnection_test.go` | LISTEN/NOTIFY detector recovers after PG connection is terminated mid-listen | Events resume flowing after reconnect |
-| 6 | CLI validation | `cli_validation_test.go` | `pgpipe listen` errors on missing --db, missing --channel, unknown adapter, webhook without --url, tx flags without WAL | N/A (all failure paths) |
-| 7 | Trigger SQL generation | `trigger_sql_test.go` | `pgpipe init --table orders` outputs valid SQL that can be executed against PG | Invalid table name rejected, invalid channel name rejected |
+| 6 | CLI validation | `cli_validation_test.go` | `pgcdc listen` errors on missing --db, missing --channel, unknown adapter, webhook without --url, tx flags without WAL | N/A (all failure paths) |
+| 7 | Trigger SQL generation | `trigger_sql_test.go` | `pgcdc init --table orders` outputs valid SQL that can be executed against PG | Invalid table name rejected, invalid channel name rejected |
 | 8 | Health endpoint | `health_endpoint_test.go` | GET /healthz returns 200 + `{"status":"ok"}` when SSE server is running | CORS preflight returns correct headers |
 | 9 | WAL replication | `wal_replication_test.go` | WAL logical replication captures INSERT/UPDATE/DELETE without triggers; events match LISTEN/NOTIFY format; tx metadata and markers work | UPDATE includes old row, DELETE includes deleted row, tx metadata shared across transaction, BEGIN/COMMIT markers wrap DML |
 | 10 | File delivery | `file_delivery_test.go` | pg_notify -> detector -> bus -> file adapter writes correct JSON lines to disk | File rotation: tiny MaxSize triggers .1 rotated file |
@@ -18,6 +18,7 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | 12 | PG table delivery | `pgtable_delivery_test.go` | pg_notify -> detector -> bus -> pg_table adapter INSERTs row into events table | Reconnect: adapter recovers after pg_terminate_backend; constraint violation → event skipped, no reconnect |
 | 13 | WS streaming | `ws_streaming_test.go` | pg_notify -> detector -> bus -> WS broker -> WebSocket client receives JSON message | Channel filter: /ws/orders only receives matching events |
 | 14 | WAL reconnection | `reconnection_test.go` | WAL detector recovers after PG connection is terminated mid-replication | Events resume flowing after WAL reconnect |
+| 15 | Snapshot | `snapshot_test.go` | Snapshot exports 100 existing rows as SNAPSHOT events through stdout adapter | Non-existent table returns clear error |
 
 ## Adding a new scenario
 

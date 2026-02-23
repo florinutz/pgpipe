@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter/webhook"
-	"github.com/florinutz/pgpipe/event"
+	"github.com/florinutz/pgcdc/adapter/webhook"
+	"github.com/florinutz/pgcdc/event"
 )
 
 func TestScenario_WebhookDelivery(t *testing.T) {
@@ -37,17 +37,17 @@ func TestScenario_WebhookDelivery(t *testing.T) {
 		if ct := req.Headers.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("Content-Type = %q, want application/json", ct)
 		}
-		if ua := req.Headers.Get("User-Agent"); ua != "pgpipe/1.0" {
-			t.Errorf("User-Agent = %q, want pgpipe/1.0", ua)
+		if ua := req.Headers.Get("User-Agent"); ua != "pgcdc/1.0" {
+			t.Errorf("User-Agent = %q, want pgcdc/1.0", ua)
 		}
 
 		// Verify HMAC signature.
-		sig := req.Headers.Get("X-PGPipe-Signature")
+		sig := req.Headers.Get("X-PGCDC-Signature")
 		mac := hmac.New(sha256.New, []byte(signingKey))
 		mac.Write(req.Body)
 		expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 		if sig != expected {
-			t.Errorf("X-PGPipe-Signature = %q, want %q", sig, expected)
+			t.Errorf("X-PGCDC-Signature = %q, want %q", sig, expected)
 		}
 
 		// Verify body is a valid event.

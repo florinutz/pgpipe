@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter/stdout"
-	"github.com/florinutz/pgpipe/adapter/webhook"
-	"github.com/florinutz/pgpipe/event"
+	"github.com/florinutz/pgcdc/adapter/stdout"
+	"github.com/florinutz/pgcdc/adapter/webhook"
+	"github.com/florinutz/pgcdc/event"
 )
 
 func TestScenario_MultiAdapterFanOut(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/florinutz/pgpipe/adapter/stdout"
-	"github.com/florinutz/pgpipe/event"
+	"github.com/florinutz/pgcdc/adapter/stdout"
+	"github.com/florinutz/pgcdc/event"
 )
 
 func TestScenario_WALReplication(t *testing.T) {
@@ -16,10 +16,10 @@ func TestScenario_WALReplication(t *testing.T) {
 
 	t.Run("happy path", func(t *testing.T) {
 		createTable(t, connStr, "wal_orders")
-		createPublication(t, connStr, "pgpipe_wal_orders", "wal_orders")
+		createPublication(t, connStr, "pgcdc_wal_orders", "wal_orders")
 
 		capture := newLineCapture()
-		startWALPipeline(t, connStr, "pgpipe_wal_orders", stdout.New(capture, testLogger()))
+		startWALPipeline(t, connStr, "pgcdc_wal_orders", stdout.New(capture, testLogger()))
 		time.Sleep(3 * time.Second)
 
 		insertRow(t, connStr, "wal_orders", map[string]any{"key": "value"})
@@ -30,8 +30,8 @@ func TestScenario_WALReplication(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("invalid JSON output: %v\nraw: %s", err, line)
 		}
-		if ev.Channel != "pgpipe:wal_orders" {
-			t.Errorf("channel = %q, want %q", ev.Channel, "pgpipe:wal_orders")
+		if ev.Channel != "pgcdc:wal_orders" {
+			t.Errorf("channel = %q, want %q", ev.Channel, "pgcdc:wal_orders")
 		}
 		if ev.Operation != "INSERT" {
 			t.Errorf("operation = %q, want %q", ev.Operation, "INSERT")
@@ -60,10 +60,10 @@ func TestScenario_WALReplication(t *testing.T) {
 
 	t.Run("no transaction metadata by default", func(t *testing.T) {
 		createTable(t, connStr, "wal_notx_orders")
-		createPublication(t, connStr, "pgpipe_wal_notx_orders", "wal_notx_orders")
+		createPublication(t, connStr, "pgcdc_wal_notx_orders", "wal_notx_orders")
 
 		capture := newLineCapture()
-		startWALPipeline(t, connStr, "pgpipe_wal_notx_orders", stdout.New(capture, testLogger()))
+		startWALPipeline(t, connStr, "pgcdc_wal_notx_orders", stdout.New(capture, testLogger()))
 		time.Sleep(3 * time.Second)
 
 		insertRow(t, connStr, "wal_notx_orders", map[string]any{"check": "no_tx"})
@@ -86,10 +86,10 @@ func TestScenario_WALReplication(t *testing.T) {
 
 	t.Run("update and delete captured", func(t *testing.T) {
 		createTable(t, connStr, "wal_ud_orders")
-		createPublication(t, connStr, "pgpipe_wal_ud_orders", "wal_ud_orders")
+		createPublication(t, connStr, "pgcdc_wal_ud_orders", "wal_ud_orders")
 
 		capture := newLineCapture()
-		startWALPipeline(t, connStr, "pgpipe_wal_ud_orders", stdout.New(capture, testLogger()))
+		startWALPipeline(t, connStr, "pgcdc_wal_ud_orders", stdout.New(capture, testLogger()))
 		time.Sleep(3 * time.Second)
 
 		insertRow(t, connStr, "wal_ud_orders", map[string]any{"status": "pending"})
@@ -149,10 +149,10 @@ func TestScenario_WALReplication(t *testing.T) {
 
 	t.Run("transaction metadata present", func(t *testing.T) {
 		createTable(t, connStr, "wal_tx_orders")
-		createPublication(t, connStr, "pgpipe_wal_tx_orders", "wal_tx_orders")
+		createPublication(t, connStr, "pgcdc_wal_tx_orders", "wal_tx_orders")
 
 		capture := newLineCapture()
-		startWALPipelineWithTxMetadata(t, connStr, "pgpipe_wal_tx_orders", stdout.New(capture, testLogger()))
+		startWALPipelineWithTxMetadata(t, connStr, "pgcdc_wal_tx_orders", stdout.New(capture, testLogger()))
 		time.Sleep(3 * time.Second)
 
 		insertRowsInTx(t, connStr, "wal_tx_orders", []map[string]any{
@@ -204,10 +204,10 @@ func TestScenario_WALReplication(t *testing.T) {
 
 	t.Run("begin and commit markers wrap DML events", func(t *testing.T) {
 		createTable(t, connStr, "wal_marker_orders")
-		createPublication(t, connStr, "pgpipe_wal_marker_orders", "wal_marker_orders")
+		createPublication(t, connStr, "pgcdc_wal_marker_orders", "wal_marker_orders")
 
 		capture := newLineCapture()
-		startWALPipelineWithTxMarkers(t, connStr, "pgpipe_wal_marker_orders", stdout.New(capture, testLogger()))
+		startWALPipelineWithTxMarkers(t, connStr, "pgcdc_wal_marker_orders", stdout.New(capture, testLogger()))
 		time.Sleep(3 * time.Second)
 
 		insertRowsInTx(t, connStr, "wal_marker_orders", []map[string]any{
@@ -238,8 +238,8 @@ func TestScenario_WALReplication(t *testing.T) {
 		if ev1.Operation != "BEGIN" {
 			t.Errorf("event 1 operation = %q, want BEGIN", ev1.Operation)
 		}
-		if ev1.Channel != "pgpipe:_txn" {
-			t.Errorf("event 1 channel = %q, want pgpipe:_txn", ev1.Channel)
+		if ev1.Channel != "pgcdc:_txn" {
+			t.Errorf("event 1 channel = %q, want pgcdc:_txn", ev1.Channel)
 		}
 		if ev1.Transaction != nil {
 			t.Errorf("BEGIN marker should have nil Transaction, got %+v", ev1.Transaction)
@@ -270,8 +270,8 @@ func TestScenario_WALReplication(t *testing.T) {
 		if ev4.Operation != "COMMIT" {
 			t.Errorf("event 4 operation = %q, want COMMIT", ev4.Operation)
 		}
-		if ev4.Channel != "pgpipe:_txn" {
-			t.Errorf("event 4 channel = %q, want pgpipe:_txn", ev4.Channel)
+		if ev4.Channel != "pgcdc:_txn" {
+			t.Errorf("event 4 channel = %q, want pgcdc:_txn", ev4.Channel)
 		}
 		if ev4.Transaction != nil {
 			t.Errorf("COMMIT marker should have nil Transaction, got %+v", ev4.Transaction)

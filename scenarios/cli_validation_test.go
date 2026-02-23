@@ -9,7 +9,7 @@ import (
 
 func TestScenario_CLIValidation(t *testing.T) {
 	t.Run("missing --db", func(t *testing.T) {
-		output, err := runPGPipe("listen", "--channel", "orders")
+		output, err := runPGCDC("listen", "--channel", "orders")
 		if err == nil {
 			t.Fatal("expected error for missing --db")
 		}
@@ -19,7 +19,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 	})
 
 	t.Run("missing --channel", func(t *testing.T) {
-		output, err := runPGPipe("listen", "--db", "postgres://localhost/test")
+		output, err := runPGCDC("listen", "--db", "postgres://localhost/test")
 		if err == nil {
 			t.Fatal("expected error for missing --channel")
 		}
@@ -29,7 +29,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 	})
 
 	t.Run("unknown adapter", func(t *testing.T) {
-		output, err := runPGPipe("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--adapter", "kafka")
+		output, err := runPGCDC("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--adapter", "kafka")
 		if err == nil {
 			t.Fatal("expected error for unknown adapter")
 		}
@@ -39,7 +39,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 	})
 
 	t.Run("tx-metadata requires WAL detector", func(t *testing.T) {
-		output, err := runPGPipe("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--tx-metadata")
+		output, err := runPGCDC("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--tx-metadata")
 		if err == nil {
 			t.Fatal("expected error for --tx-metadata without WAL")
 		}
@@ -49,7 +49,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 	})
 
 	t.Run("tx-markers requires WAL detector", func(t *testing.T) {
-		output, err := runPGPipe("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--tx-markers")
+		output, err := runPGCDC("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--tx-markers")
 		if err == nil {
 			t.Fatal("expected error for --tx-markers without WAL")
 		}
@@ -59,7 +59,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 	})
 
 	t.Run("webhook without --url", func(t *testing.T) {
-		output, err := runPGPipe("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--adapter", "webhook")
+		output, err := runPGCDC("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--adapter", "webhook")
 		if err == nil {
 			t.Fatal("expected error for webhook without URL")
 		}

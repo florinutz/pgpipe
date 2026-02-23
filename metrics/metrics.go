@@ -7,53 +7,64 @@ import (
 
 var (
 	EventsReceived = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "pgpipe_events_received_total",
+		Name: "pgcdc_events_received_total",
 		Help: "Total number of events received by the bus.",
 	})
 
 	EventsDelivered = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "pgpipe_events_delivered_total",
+		Name: "pgcdc_events_delivered_total",
 		Help: "Total number of events delivered by adapters.",
 	}, []string{"adapter"})
 
 	EventsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "pgpipe_events_dropped_total",
+		Name: "pgcdc_events_dropped_total",
 		Help: "Total number of events dropped due to full subscriber channels.",
 	}, []string{"adapter"})
 
 	WebhookRetries = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "pgpipe_webhook_retries_total",
+		Name: "pgcdc_webhook_retries_total",
 		Help: "Total number of webhook delivery retries.",
 	})
 
 	WebhookDuration = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "pgpipe_webhook_duration_seconds",
+		Name:    "pgcdc_webhook_duration_seconds",
 		Help:    "Duration of webhook HTTP requests.",
 		Buckets: prometheus.DefBuckets,
 	})
 
 	SSEClientsActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "pgpipe_sse_clients_active",
+		Name: "pgcdc_sse_clients_active",
 		Help: "Number of active SSE client connections.",
 	}, []string{"channel"})
 
 	BusSubscribers = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "pgpipe_bus_subscribers",
+		Name: "pgcdc_bus_subscribers",
 		Help: "Number of active bus subscribers.",
 	})
 
 	FileRotations = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "pgpipe_file_rotations_total",
+		Name: "pgcdc_file_rotations_total",
 		Help: "Total number of file rotations.",
 	})
 
 	ExecRestarts = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "pgpipe_exec_restarts_total",
+		Name: "pgcdc_exec_restarts_total",
 		Help: "Total number of exec subprocess restarts.",
 	})
 
 	WSClientsActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "pgpipe_ws_clients_active",
+		Name: "pgcdc_ws_clients_active",
 		Help: "Number of active WebSocket client connections.",
 	}, []string{"channel"})
+
+	SnapshotRowsExported = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_snapshot_rows_exported_total",
+		Help: "Total number of rows exported during snapshots.",
+	})
+
+	SnapshotDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "pgcdc_snapshot_duration_seconds",
+		Help:    "Duration of snapshot operations.",
+		Buckets: []float64{1, 5, 10, 30, 60, 120, 300, 600},
+	})
 )

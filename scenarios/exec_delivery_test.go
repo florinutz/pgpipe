@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	execadapter "github.com/florinutz/pgpipe/adapter/exec"
-	"github.com/florinutz/pgpipe/event"
+	execadapter "github.com/florinutz/pgcdc/adapter/exec"
+	"github.com/florinutz/pgcdc/event"
 )
 
 func TestScenario_ExecDelivery(t *testing.T) {

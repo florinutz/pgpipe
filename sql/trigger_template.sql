@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION pgpipe_notify_{{.Table}}() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION pgcdc_notify_{{.Table}}() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify('{{.Channel}}', json_build_object(
     'op', TG_OP,
@@ -10,6 +10,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER pgpipe_{{.Table}}_trigger
+CREATE TRIGGER pgcdc_{{.Table}}_trigger
   AFTER INSERT OR UPDATE OR DELETE ON {{.Table}}
-  FOR EACH ROW EXECUTE FUNCTION pgpipe_notify_{{.Table}}();
+  FOR EACH ROW EXECUTE FUNCTION pgcdc_notify_{{.Table}}();

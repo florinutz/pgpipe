@@ -27,9 +27,9 @@ func StartPostgres(t *testing.T) *PostgresContainer {
 		Image:        "postgres:16-alpine",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
-			"POSTGRES_USER":     "pgpipe",
-			"POSTGRES_PASSWORD": "pgpipe",
-			"POSTGRES_DB":       "pgpipe_test",
+			"POSTGRES_USER":     "pgcdc",
+			"POSTGRES_PASSWORD": "pgcdc",
+			"POSTGRES_DB":       "pgcdc_test",
 		},
 		WaitingFor: wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
 	}
@@ -56,7 +56,7 @@ func StartPostgres(t *testing.T) *PostgresContainer {
 		t.Fatalf("get mapped port: %v", err)
 	}
 
-	connStr := fmt.Sprintf("postgres://pgpipe:pgpipe@%s:%s/pgpipe_test?sslmode=disable", host, port.Port())
+	connStr := fmt.Sprintf("postgres://pgcdc:pgcdc@%s:%s/pgcdc_test?sslmode=disable", host, port.Port())
 
 	// Verify connectivity.
 	conn, err := pgx.Connect(ctx, connStr)

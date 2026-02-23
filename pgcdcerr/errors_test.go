@@ -1,23 +1,23 @@
-package pgpipeerr_test
+package pgcdcerr_test
 
 import (
 	"errors"
 	"fmt"
 	"testing"
 
-	"github.com/florinutz/pgpipe/pgpipeerr"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 )
 
 func TestErrBusClosed(t *testing.T) {
-	err := fmt.Errorf("subscribe: %w", pgpipeerr.ErrBusClosed)
-	if !errors.Is(err, pgpipeerr.ErrBusClosed) {
+	err := fmt.Errorf("subscribe: %w", pgcdcerr.ErrBusClosed)
+	if !errors.Is(err, pgcdcerr.ErrBusClosed) {
 		t.Error("errors.Is should match ErrBusClosed")
 	}
 }
 
 func TestWebhookDeliveryError(t *testing.T) {
 	cause := fmt.Errorf("connection refused")
-	err := &pgpipeerr.WebhookDeliveryError{
+	err := &pgcdcerr.WebhookDeliveryError{
 		EventID: "evt-1",
 		URL:     "https://example.com/hook",
 		Retries: 5,
@@ -25,7 +25,7 @@ func TestWebhookDeliveryError(t *testing.T) {
 	}
 
 	// errors.As
-	var target *pgpipeerr.WebhookDeliveryError
+	var target *pgcdcerr.WebhookDeliveryError
 	if !errors.As(err, &target) {
 		t.Fatal("errors.As should match WebhookDeliveryError")
 	}
@@ -46,7 +46,7 @@ func TestWebhookDeliveryError(t *testing.T) {
 }
 
 func TestWebhookDeliveryError_StatusCode(t *testing.T) {
-	err := &pgpipeerr.WebhookDeliveryError{
+	err := &pgcdcerr.WebhookDeliveryError{
 		EventID:    "evt-2",
 		URL:        "https://example.com/hook",
 		StatusCode: 500,
@@ -60,12 +60,12 @@ func TestWebhookDeliveryError_StatusCode(t *testing.T) {
 
 func TestDetectorDisconnectedError(t *testing.T) {
 	cause := fmt.Errorf("connection reset")
-	err := &pgpipeerr.DetectorDisconnectedError{
+	err := &pgcdcerr.DetectorDisconnectedError{
 		Source: "listen_notify",
 		Err:    cause,
 	}
 
-	var target *pgpipeerr.DetectorDisconnectedError
+	var target *pgcdcerr.DetectorDisconnectedError
 	if !errors.As(err, &target) {
 		t.Fatal("errors.As should match DetectorDisconnectedError")
 	}
