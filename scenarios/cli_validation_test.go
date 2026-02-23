@@ -67,4 +67,24 @@ func TestScenario_CLIValidation(t *testing.T) {
 			t.Errorf("unexpected output: %s", output)
 		}
 	})
+
+	t.Run("snapshot-first requires WAL detector", func(t *testing.T) {
+		output, err := runPGCDC("listen", "--db", "postgres://localhost/test", "--channel", "orders", "--snapshot-first", "--snapshot-table", "orders")
+		if err == nil {
+			t.Fatal("expected error for --snapshot-first without WAL")
+		}
+		if !strings.Contains(output, "--snapshot-first requires --detector wal") {
+			t.Errorf("unexpected output: %s", output)
+		}
+	})
+
+	t.Run("snapshot-first requires --snapshot-table", func(t *testing.T) {
+		output, err := runPGCDC("listen", "--db", "postgres://localhost/test", "--detector", "wal", "--publication", "p", "--snapshot-first")
+		if err == nil {
+			t.Fatal("expected error for --snapshot-first without --snapshot-table")
+		}
+		if !strings.Contains(output, "--snapshot-first requires --snapshot-table") {
+			t.Errorf("unexpected output: %s", output)
+		}
+	})
 }

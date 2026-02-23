@@ -119,6 +119,28 @@ pgcdc snapshot --table orders --where "created_at > '2025-01-01'" --db postgres:
 
 Snapshot events use the same `event.Event` format as live changes, with `operation: "SNAPSHOT"` and `source: "snapshot"`. All existing adapters work unchanged.
 
+### Snapshot-First: Zero-Gap Initial Sync
+
+Combine snapshot + live WAL streaming in one command. Exports all existing rows, then seamlessly transitions to real-time change capture with no gap:
+
+```bash
+pgcdc listen --detector wal --publication pgcdc_orders \
+  --snapshot-first --snapshot-table orders --db postgres://localhost:5432/mydb
+```
+
+How it works: pgcdc creates a replication slot, snapshots the table using the slot's exported snapshot (so you see exactly the data at that WAL position), then starts streaming changes from that position. Zero duplicates, zero gaps.
+
+```
+Phase 1: SNAPSHOT events (existing rows)
+  {"operation":"SNAPSHOT","source":"snapshot","channel":"pgcdc:orders",...}
+  {"operation":"SNAPSHOT","source":"snapshot","channel":"pgcdc:orders",...}
+  ...
+
+Phase 2: Live WAL events (new changes)
+  {"operation":"INSERT","source":"wal_replication","channel":"pgcdc:orders",...}
+  {"operation":"UPDATE","source":"wal_replication","channel":"pgcdc:orders",...}
+```
+
 ### Alternative: WAL Logical Replication
 
 No triggers needed. Captures changes directly from the PostgreSQL write-ahead log.
@@ -384,6 +406,9 @@ pgcdc listen [flags]
       --tx-metadata            Include transaction metadata in WAL events (xid, commit_time, seq)
       --tx-markers             Emit BEGIN/COMMIT marker events (implies --tx-metadata)
       --metrics-addr string    Standalone metrics/health server address (e.g. :9090)
+      --snapshot-first         Run table snapshot before live WAL streaming
+      --snapshot-table string  Table to snapshot (required with --snapshot-first)
+      --snapshot-where string  Optional WHERE clause for snapshot
       --file-path string       File adapter output path
       --file-max-size int      File rotation size in bytes (default 104857600)
       --file-max-files int     Number of rotated files to keep (default 5)

@@ -17,6 +17,7 @@ import (
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/pgcdcerr"
+	"github.com/florinutz/pgcdc/snapshot"
 )
 
 const (
@@ -42,6 +43,14 @@ type Detector struct {
 	txMetadata  bool
 	txMarkers   bool
 	logger      *slog.Logger
+
+	// snapshot-first fields: when snapshotTable is set, the detector runs a
+	// table snapshot using the replication slot's exported snapshot before
+	// transitioning to live WAL streaming.
+	snapshotTable     string
+	snapshotWhere     string
+	snapshotBatchSize int
+	snapshotDone      bool
 }
 
 // txState tracks the current transaction when txMetadata is enabled.
@@ -82,6 +91,15 @@ func New(dbURL string, publication string, backoffBase, backoffCap time.Duration
 // Name returns the detector name.
 func (d *Detector) Name() string {
 	return source
+}
+
+// SetSnapshotFirst configures the detector to run a table snapshot before
+// starting live WAL streaming. The snapshot uses the replication slot's
+// exported snapshot for zero-gap delivery.
+func (d *Detector) SetSnapshotFirst(table, where string, batchSize int) {
+	d.snapshotTable = table
+	d.snapshotWhere = where
+	d.snapshotBatchSize = batchSize
 }
 
 // Start connects to PostgreSQL, creates a temporary replication slot, and
@@ -151,6 +169,31 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 	consistentPoint, err := pglogrepl.ParseLSN(result.ConsistentPoint)
 	if err != nil {
 		return fmt.Errorf("parse consistent point: %w", err)
+	}
+
+	// If snapshot-first is configured, export existing rows using the slot's
+	// snapshot before starting replication. The snapshot runs on a separate
+	// regular connection with SET TRANSACTION SNAPSHOT to see exactly the
+	// data state at the slot's consistent point — zero gap.
+	if d.snapshotTable != "" && !d.snapshotDone {
+		if result.SnapshotName == "" {
+			return fmt.Errorf("snapshot-first: replication slot did not export a snapshot name")
+		}
+
+		snap := snapshot.New(d.dbURL, d.snapshotTable, d.snapshotWhere, d.snapshotBatchSize, d.logger)
+		snap.SetSnapshotName(result.SnapshotName)
+
+		d.logger.Info("snapshot-first: exporting existing rows",
+			"table", d.snapshotTable,
+			"snapshot_name", result.SnapshotName,
+		)
+
+		if err := snap.Run(ctx, events); err != nil {
+			return fmt.Errorf("snapshot-first: %w", err)
+		}
+
+		d.snapshotDone = true
+		d.logger.Info("snapshot-first complete, transitioning to live WAL streaming")
 	}
 
 	// Start replication.

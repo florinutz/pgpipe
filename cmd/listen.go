@@ -67,6 +67,11 @@ func init() {
 	// WebSocket adapter flags.
 	f.Duration("ws-ping-interval", 0, "WebSocket ping interval (default 15s)")
 
+	// Snapshot-first flags (no viper bindings — read directly to avoid collision).
+	f.Bool("snapshot-first", false, "run a table snapshot before live WAL streaming (requires --detector wal)")
+	f.String("snapshot-table", "", "table to snapshot (required with --snapshot-first)")
+	f.String("snapshot-where", "", "optional WHERE clause for snapshot")
+
 	mustBindPFlag("channels", f.Lookup("channel"))
 	mustBindPFlag("adapters", f.Lookup("adapter"))
 	mustBindPFlag("webhook.url", f.Lookup("url"))
@@ -100,6 +105,11 @@ func runListen(cmd *cobra.Command, args []string) error {
 		cfg.Detector.TxMetadata = true
 	}
 
+	// Snapshot-first flags (read directly to avoid viper key collisions).
+	snapshotFirst, _ := cmd.Flags().GetBool("snapshot-first")
+	snapshotTable, _ := cmd.Flags().GetString("snapshot-table")
+	snapshotWhere, _ := cmd.Flags().GetString("snapshot-where")
+
 	// Validation.
 	if cfg.Detector.Type != "wal" && (cfg.Detector.TxMetadata || cfg.Detector.TxMarkers) {
 		return fmt.Errorf("--tx-metadata and --tx-markers require --detector wal")
@@ -112,6 +122,12 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 	if cfg.Detector.Type == "wal" && cfg.Detector.Publication == "" {
 		return fmt.Errorf("WAL detector requires a publication; use --publication or set detector.publication in config")
+	}
+	if snapshotFirst && cfg.Detector.Type != "wal" {
+		return fmt.Errorf("--snapshot-first requires --detector wal")
+	}
+	if snapshotFirst && snapshotTable == "" {
+		return fmt.Errorf("--snapshot-first requires --snapshot-table")
 	}
 
 	// Validate adapters and check requirements early.
@@ -166,7 +182,11 @@ func runListen(cmd *cobra.Command, args []string) error {
 	case "listen_notify", "":
 		det = listennotify.New(cfg.DatabaseURL, cfg.Channels, cfg.Detector.BackoffBase, cfg.Detector.BackoffCap, logger)
 	case "wal":
-		det = walreplication.New(cfg.DatabaseURL, cfg.Detector.Publication, cfg.Detector.BackoffBase, cfg.Detector.BackoffCap, cfg.Detector.TxMetadata, cfg.Detector.TxMarkers, logger)
+		walDet := walreplication.New(cfg.DatabaseURL, cfg.Detector.Publication, cfg.Detector.BackoffBase, cfg.Detector.BackoffCap, cfg.Detector.TxMetadata, cfg.Detector.TxMarkers, logger)
+		if snapshotFirst {
+			walDet.SetSnapshotFirst(snapshotTable, snapshotWhere, cfg.Snapshot.BatchSize)
+		}
+		det = walDet
 	default:
 		return fmt.Errorf("unknown detector type: %q (expected listen_notify or wal)", cfg.Detector.Type)
 	}
