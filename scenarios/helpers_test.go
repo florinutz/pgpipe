@@ -461,6 +461,33 @@ func createPublication(t *testing.T, connStr, pubName, table string) {
 	}
 }
 
+func createPublicationAllTables(t *testing.T, connStr, pubName string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		t.Fatalf("createPublicationAllTables connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	sql := fmt.Sprintf(`CREATE PUBLICATION %s FOR ALL TABLES`, pgx.Identifier{pubName}.Sanitize())
+	if _, err := conn.Exec(ctx, sql); err != nil {
+		t.Fatalf("createPublicationAllTables: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel2()
+		conn2, err := pgx.Connect(ctx2, connStr)
+		if err != nil {
+			return
+		}
+		defer conn2.Close(ctx2)
+		conn2.Exec(ctx2, fmt.Sprintf("DROP PUBLICATION IF EXISTS %s", pgx.Identifier{pubName}.Sanitize()))
+	})
+}
+
 func updateRow(t *testing.T, connStr, table string, id int, data map[string]any) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -49,12 +49,21 @@ pgcdc init --table orders | psql mydb
 pgcdc listen -c pgcdc:orders --db postgres://localhost:5432/mydb
 ```
 
-### Path 2: WAL Replication (production, no triggers)
+### Path 2: WAL Replication — zero-config (production, no triggers)
 
 Requires `wal_level=logical` in `postgresql.conf`.
 
 ```bash
-# Create publication
+# Stream ALL tables — no setup needed
+pgcdc listen --all-tables --db postgres://localhost:5432/mydb
+```
+
+Auto-creates a `FOR ALL TABLES` publication. Add `--persistent-slot` for crash-resilient streaming.
+
+### Path 2b: WAL Replication — per-table
+
+```bash
+# Create publication for specific table
 pgcdc init --table orders --detector wal | psql mydb
 
 # Stream with persistent slot (survives restarts)
