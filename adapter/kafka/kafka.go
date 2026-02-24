@@ -13,6 +13,7 @@ import (
 
 	"github.com/florinutz/pgcdc/adapter"
 	"github.com/florinutz/pgcdc/dlq"
+	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/metrics"
@@ -28,6 +29,7 @@ const adapterName = "kafka"
 type Adapter struct {
 	brokers     []string
 	topic       string // fixed topic; empty = per-channel mapping
+	encoder     encoding.Encoder
 	saslMech    sasl.Mechanism
 	tlsConfig   *tls.Config
 	dlqInstance dlq.DLQ
@@ -47,12 +49,13 @@ func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
 func (a *Adapter) Name() string { return adapterName }
 
 // New creates a Kafka adapter. Duration parameters default to sensible values
-// when zero.
+// when zero. If encoder is nil, events are sent as raw JSON (current behavior).
 func New(
 	brokers []string,
 	topic, saslMechanism, saslUser, saslPass, tlsCAFile string,
 	tlsEnabled bool,
 	backoffBase, backoffCap time.Duration,
+	encoder encoding.Encoder,
 	logger *slog.Logger,
 ) *Adapter {
 	if logger == nil {
@@ -99,6 +102,7 @@ func New(
 	return &Adapter{
 		brokers:     brokers,
 		topic:       topic,
+		encoder:     encoder,
 		saslMech:    saslMech,
 		tlsConfig:   tlsCfg,
 		backoffBase: backoffBase,
@@ -169,14 +173,39 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 			}
 
 			topic := a.topicForEvent(ev)
+
+			value := ev.Payload
+			contentType := "application/json"
+			if a.encoder != nil {
+				encoded, encErr := a.encoder.Encode(ev, ev.Payload)
+				if encErr != nil {
+					metrics.EncodingErrors.Add(1)
+					a.logger.Warn("encoding failed, recording to DLQ",
+						"error", encErr,
+						"event_id", ev.ID,
+						"topic", topic,
+					)
+					if a.dlqInstance != nil {
+						_ = a.dlqInstance.Record(ctx, ev, adapterName, encErr)
+					}
+					if a.ackFn != nil && ev.LSN > 0 {
+						a.ackFn(ev.LSN)
+					}
+					continue
+				}
+				value = encoded
+				contentType = a.encoder.ContentType()
+			}
+
 			msg := kafkago.Message{
 				Topic: topic,
 				Key:   []byte(ev.ID),
-				Value: ev.Payload,
+				Value: value,
 				Headers: []kafkago.Header{
 					{Key: "pgcdc-channel", Value: []byte(ev.Channel)},
 					{Key: "pgcdc-operation", Value: []byte(ev.Operation)},
 					{Key: "pgcdc-event-id", Value: []byte(ev.ID)},
+					{Key: "content-type", Value: []byte(contentType)},
 				},
 			}
 

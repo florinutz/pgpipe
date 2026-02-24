@@ -28,7 +28,7 @@ test:
 
 ## test-scenarios: Run scenario tests (requires Docker)
 test-scenarios:
-	go test -race -count=1 -timeout=300s -tags=integration ./scenarios/...
+	go test -race -count=1 -timeout=600s -tags=integration ./scenarios/...
 
 ## test-all: Run unit + scenario tests
 test-all: test test-scenarios

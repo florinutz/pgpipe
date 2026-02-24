@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/florinutz/pgcdc/adapter"
+	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/metrics"
@@ -25,6 +26,7 @@ type Adapter struct {
 	subjectPrefix string
 	streamName    string
 	credFile      string
+	encoder       encoding.Encoder
 	maxAge        time.Duration
 	backoffBase   time.Duration
 	backoffCap    time.Duration
@@ -36,10 +38,11 @@ type Adapter struct {
 func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
 
 // New creates a NATS JetStream adapter. Duration parameters default to sensible
-// values when zero.
+// values when zero. If encoder is nil, events are sent as JSON (current behavior).
 func New(
 	url, subjectPrefix, streamName, credFile string,
 	maxAge, backoffBase, backoffCap time.Duration,
+	encoder encoding.Encoder,
 	logger *slog.Logger,
 ) *Adapter {
 	if logger == nil {
@@ -65,6 +68,7 @@ func New(
 		subjectPrefix: subjectPrefix,
 		streamName:    streamName,
 		credFile:      credFile,
+		encoder:       encoder,
 		maxAge:        maxAge,
 		backoffBase:   backoffBase,
 		backoffCap:    backoffCap,
@@ -155,6 +159,16 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 			if err != nil {
 				a.logger.Error("marshal event failed", "error", err, "event_id", ev.ID)
 				continue
+			}
+
+			if a.encoder != nil {
+				encoded, encErr := a.encoder.Encode(ev, data)
+				if encErr != nil {
+					metrics.EncodingErrors.Add(1)
+					a.logger.Error("encoding failed, skipping event", "error", encErr, "event_id", ev.ID)
+					continue
+				}
+				data = encoded
 			}
 
 			start := time.Now()

@@ -426,6 +426,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 				cfg.Nats.MaxAge,
 				cfg.Nats.BackoffBase,
 				cfg.Nats.BackoffCap,
+				nil, // no encoding for snapshot
 				logger,
 			)))
 		case "search":

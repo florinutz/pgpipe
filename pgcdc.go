@@ -356,7 +356,7 @@ func (p *Pipeline) subscribeAdapter(name string) (<-chan event.Event, error) {
 	fn := p.buildTransformChain(name)
 	autoAck := p.autoAckAdapters[name]
 
-	if fn == nil && routeFilter == nil && !autoAck {
+	if fn == nil && routeFilter == nil && !autoAck && p.backpressureCtrl == nil {
 		return ch, nil
 	}
 

@@ -40,6 +40,8 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 
 | 31 | Source-aware backpressure | `backpressure_test.go` | WAL+persistent slot+cooperative checkpoint: backpressure controller transitions zones, events arrive throttled but not lost | Load shedding: critical adapter receives all events, best-effort adapter is shed in yellow zone |
 
+| 32 | Avro/Protobuf encoding | `encoding_test.go` | NOTIFY → detector → bus → Kafka adapter with Avro encoder produces binary Avro message; Schema Registry integration registers schema and prepends Confluent wire format header | Schema Registry unavailable: encoding error goes to DLQ, adapter continues |
+
 ## Adding a new scenario
 
 1. Create `scenarios/<name>_test.go`

@@ -34,6 +34,8 @@ import (
 	"github.com/florinutz/pgcdc/detector/outbox"
 	"github.com/florinutz/pgcdc/detector/walreplication"
 	"github.com/florinutz/pgcdc/dlq"
+	"github.com/florinutz/pgcdc/encoding"
+	"github.com/florinutz/pgcdc/encoding/registry"
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/internal/server"
 	"github.com/florinutz/pgcdc/snapshot"
@@ -159,6 +161,13 @@ func init() {
 	f.Bool("kafka-tls", false, "enable TLS for Kafka connection")
 	f.String("kafka-tls-ca-file", "", "CA certificate file for Kafka TLS")
 
+	// Encoding flags (read directly, not viper-bound).
+	f.String("kafka-encoding", "json", "Kafka message encoding: json, avro, or protobuf")
+	f.String("nats-encoding", "json", "NATS message encoding: json, avro, or protobuf")
+	f.String("schema-registry-url", "", "Confluent Schema Registry URL")
+	f.String("schema-registry-username", "", "Schema Registry basic auth username")
+	f.String("schema-registry-password", "", "Schema Registry basic auth password")
+
 	// DLQ flags.
 	f.String("dlq", "stderr", "dead letter queue backend: stderr, pg_table, or none")
 	f.String("dlq-table", "pgcdc_dead_letters", "DLQ table name (for pg_table backend)")
@@ -260,6 +269,11 @@ func init() {
 	mustBindPFlag("kafka.sasl_password", f.Lookup("kafka-sasl-password"))
 	mustBindPFlag("kafka.tls", f.Lookup("kafka-tls"))
 	mustBindPFlag("kafka.tls_ca_file", f.Lookup("kafka-tls-ca-file"))
+	mustBindPFlag("kafka.encoding", f.Lookup("kafka-encoding"))
+	mustBindPFlag("nats.encoding", f.Lookup("nats-encoding"))
+	mustBindPFlag("encoding.schema_registry_url", f.Lookup("schema-registry-url"))
+	mustBindPFlag("encoding.schema_registry_username", f.Lookup("schema-registry-username"))
+	mustBindPFlag("encoding.schema_registry_password", f.Lookup("schema-registry-password"))
 
 	mustBindPFlag("embedding.api_url", f.Lookup("embedding-api-url"))
 	mustBindPFlag("embedding.api_key", f.Lookup("embedding-api-key"))
@@ -541,6 +555,20 @@ func runListen(cmd *cobra.Command, args []string) error {
 		opts = append(opts, pgcdc.WithBackpressure(bpCtrl))
 	}
 
+	// Build encoders for Kafka and NATS (nil = JSON passthrough).
+	kafkaEncoder, natsEncoder, encErr := buildEncoders(cfg, logger)
+	if encErr != nil {
+		return encErr
+	}
+	defer func() {
+		if kafkaEncoder != nil {
+			_ = kafkaEncoder.Close()
+		}
+		if natsEncoder != nil {
+			_ = natsEncoder.Close()
+		}
+	}()
+
 	// Wasm runtime (created eagerly when any plugin is configured).
 	var wasmRT any
 	if anyPluginsConfigured(cfg, cmd) {
@@ -761,7 +789,7 @@ func runListen(cmd *cobra.Command, args []string) error {
 			}
 			opts = append(opts, pgcdc.WithAdapter(a))
 		case "nats":
-			a, aErr := makeNATSAdapter(cfg, logger)
+			a, aErr := makeNATSAdapter(cfg, natsEncoder, logger)
 			if aErr != nil {
 				return aErr
 			}
@@ -792,7 +820,7 @@ func runListen(cmd *cobra.Command, args []string) error {
 			}
 			opts = append(opts, pgcdc.WithAdapter(a))
 		case "kafka":
-			a, aErr := makeKafkaAdapter(cfg, logger)
+			a, aErr := makeKafkaAdapter(cfg, kafkaEncoder, logger)
 			if aErr != nil {
 				return aErr
 			}
@@ -1012,5 +1040,54 @@ func specToTransform(spec config.TransformSpec) transform.TransformFunc {
 		return transform.Debezium(dopts...)
 	default:
 		return nil
+	}
+}
+
+// buildEncoders creates encoders for Kafka and NATS based on config.
+// Returns nil encoders for JSON encoding (default, no-op passthrough).
+func buildEncoders(cfg config.Config, logger *slog.Logger) (kafkaEnc, natsEnc encoding.Encoder, err error) {
+	// Parse encoding types.
+	kafkaEncType, err := encoding.ParseEncodingType(cfg.Kafka.Encoding)
+	if err != nil {
+		return nil, nil, fmt.Errorf("kafka encoding: %w", err)
+	}
+	natsEncType, err := encoding.ParseEncodingType(cfg.Nats.Encoding)
+	if err != nil {
+		return nil, nil, fmt.Errorf("nats encoding: %w", err)
+	}
+
+	// If both are JSON, no encoders needed.
+	if kafkaEncType == encoding.EncodingJSON && natsEncType == encoding.EncodingJSON {
+		return nil, nil, nil
+	}
+
+	// Build schema registry client if any non-JSON encoding is configured.
+	var regClient *registry.Client
+	if cfg.Encoding.SchemaRegistryURL != "" {
+		regClient = registry.New(
+			cfg.Encoding.SchemaRegistryURL,
+			cfg.Encoding.SchemaRegistryUsername,
+			cfg.Encoding.SchemaRegistryPassword,
+		)
+	}
+
+	kafkaEnc = makeEncoder(kafkaEncType, regClient, logger)
+	natsEnc = makeEncoder(natsEncType, regClient, logger)
+
+	return kafkaEnc, natsEnc, nil
+}
+
+func makeEncoder(encType encoding.EncodingType, regClient *registry.Client, logger *slog.Logger) encoding.Encoder {
+	switch encType {
+	case encoding.EncodingAvro:
+		opts := []encoding.AvroOption{}
+		if regClient != nil {
+			opts = append(opts, encoding.WithRegistry(regClient))
+		}
+		return encoding.NewAvroEncoder(logger, opts...)
+	case encoding.EncodingProtobuf:
+		return encoding.NewProtobufEncoder(regClient, logger)
+	default:
+		return nil // JSON = nil encoder, adapters use raw bytes
 	}
 }
