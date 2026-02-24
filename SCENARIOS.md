@@ -36,6 +36,8 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 
 | 29 | Wasm plugins | `plugin_test.go` | Wasm transform drops field from payload; Wasm transform returns empty = event dropped; Wasm adapter receives events via handle(); DLQ plugin records; checkpoint store load/save | Wasm adapter error → DLQ |
 
+| 30 | All-tables zero-config | `all_tables_test.go` | FOR ALL TABLES publication captures INSERT events from multiple tables simultaneously; both `pgcdc:at_orders` and `pgcdc:at_customers` channels deliver events | N/A (single happy path) |
+
 ## Adding a new scenario
 
 1. Create `scenarios/<name>_test.go`

@@ -13,6 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/florinutz/pgcdc"
 	embeddingadapter "github.com/florinutz/pgcdc/adapter/embedding"
 	execadapter "github.com/florinutz/pgcdc/adapter/exec"
@@ -61,6 +64,7 @@ func init() {
 	f.String("metrics-addr", "", "standalone metrics/health server address (e.g. :9090)")
 	f.String("detector", "listen_notify", "detector type: listen_notify, wal, or outbox")
 	f.String("publication", "", "PostgreSQL publication name (required for --detector wal)")
+	f.Bool("all-tables", false, "auto-create a FOR ALL TABLES publication and start WAL streaming (zero-config)")
 	f.Bool("tx-metadata", false, "include transaction metadata in WAL events (xid, commit_time, seq)")
 	f.Bool("tx-markers", false, "emit BEGIN/COMMIT marker events (implies --tx-metadata)")
 
@@ -318,6 +322,20 @@ func runListen(cmd *cobra.Command, args []string) error {
 	// Cooperative checkpoint flag (read directly to avoid viper collisions).
 	cooperativeCheckpoint, _ := cmd.Flags().GetBool("cooperative-checkpoint")
 
+	// all-tables flag (read directly — no viper binding needed).
+	allTables, _ := cmd.Flags().GetBool("all-tables")
+	if allTables {
+		if cfg.Detector.Type == "outbox" {
+			return fmt.Errorf("--all-tables is not compatible with --detector outbox")
+		}
+		if cfg.Detector.Type == "listen_notify" {
+			cfg.Detector.Type = "wal"
+		}
+		if cfg.Detector.Publication == "" {
+			cfg.Detector.Publication = "all"
+		}
+	}
+
 	// Parse bus mode from config.
 	var busMode bus.BusMode
 	switch cfg.Bus.Mode {
@@ -339,7 +357,7 @@ func runListen(cmd *cobra.Command, args []string) error {
 	if cfg.Detector.Type == "listen_notify" && len(cfg.Channels) == 0 {
 		return fmt.Errorf("no channels specified; use --channel or set channels in config file")
 	}
-	if cfg.Detector.Type == "wal" && cfg.Detector.Publication == "" {
+	if cfg.Detector.Type == "wal" && cfg.Detector.Publication == "" && !allTables {
 		return fmt.Errorf("WAL detector requires a publication; use --publication or set detector.publication in config")
 	}
 	if snapshotFirst && cfg.Detector.Type != "wal" {
@@ -522,6 +540,13 @@ func runListen(cmd *cobra.Command, args []string) error {
 		}
 		channels := strings.Split(parts[1], ",")
 		opts = append(opts, pgcdc.WithRoute(parts[0], channels...))
+	}
+
+	// Auto-create FOR ALL TABLES publication when --all-tables is set.
+	if allTables {
+		if err := ensureAllTablesPublication(ctx, cfg.DatabaseURL, cfg.Detector.Publication, logger); err != nil {
+			return fmt.Errorf("ensure all-tables publication: %w", err)
+		}
 	}
 
 	// Create detector.
@@ -808,6 +833,30 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 
 	return err
+}
+
+// ensureAllTablesPublication creates a FOR ALL TABLES publication if it doesn't already exist.
+func ensureAllTablesPublication(ctx context.Context, dbURL, publication string, logger *slog.Logger) error {
+	conn, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(ctx)
+
+	_, err = conn.Exec(ctx, fmt.Sprintf(
+		"CREATE PUBLICATION %s FOR ALL TABLES",
+		pgx.Identifier{publication}.Sanitize(),
+	))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42710" { // duplicate_object
+			logger.Info("all-tables publication already exists, reusing", "publication", publication)
+			return nil
+		}
+		return fmt.Errorf("create publication: %w", err)
+	}
+	logger.Info("created all-tables publication", "publication", publication)
+	return nil
 }
 
 // buildTransformOpts parses CLI flags and config to produce pipeline transform options.

@@ -42,6 +42,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 
 - **Concurrency**: `errgroup` manages all goroutines. One context cancellation tears everything down.
 - **Backpressure**: `--bus-mode fast` (default) drops events on full subscriber channels. `--bus-mode reliable` blocks the detector instead of dropping — loss-free at the cost of throughput.
+- **All-tables zero-config**: `--all-tables` auto-creates a `FOR ALL TABLES` publication and switches to WAL detector. Zero setup — no `pgcdc init`, no manual SQL, no `--publication` needed. Idempotent: reuses existing publication on restart. Default publication name: `all` (override with `--publication`).
 - **Transaction metadata**: WAL detector optionally enriches events with `transaction.xid`, `transaction.commit_time`, `transaction.seq` when `--tx-metadata` is enabled. `--tx-markers` adds synthetic BEGIN/COMMIT events on channel `pgcdc:_txn` (implies `--tx-metadata`). LISTEN/NOTIFY events omit this field (protocol has no tx info).
 - **Snapshot-first**: `--snapshot-first --snapshot-table <table>` on listen (WAL only) runs a table snapshot using the replication slot's exported snapshot before transitioning to live streaming. Zero-gap delivery — snapshot sees exactly the data at the slot's consistent point, WAL streams everything after.
 - **Persistent slots + checkpointing**: `--persistent-slot` creates a named, non-temporary replication slot with LSN checkpointing to `pgcdc_checkpoints` table. Survives crash/restart. Configurable via `--slot-name`, `--checkpoint-db`.

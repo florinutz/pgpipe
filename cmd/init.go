@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"text/template"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/spf13/cobra"
 )
 
@@ -68,25 +69,38 @@ var initCmd = &cobra.Command{
 
 By default, generates CREATE FUNCTION and CREATE TRIGGER for LISTEN/NOTIFY.
 With --detector wal, generates CREATE PUBLICATION for WAL logical replication.
+With --detector wal --all-tables, generates CREATE PUBLICATION FOR ALL TABLES (no --table needed).
 With --adapter pg_table, generates CREATE TABLE for the pg_table adapter.`,
 	RunE: runInit,
 }
 
 func init() {
-	initCmd.Flags().String("table", "", "table name (required)")
+	initCmd.Flags().String("table", "", "table name (required unless --all-tables)")
 	initCmd.Flags().String("channel", "", "channel name (default: pgcdc:<table>)")
 	initCmd.Flags().String("detector", "listen_notify", "detector type: listen_notify or wal")
 	initCmd.Flags().String("publication", "", "publication name for WAL detector (default: pgcdc_<table>)")
+	initCmd.Flags().Bool("all-tables", false, "generate FOR ALL TABLES publication (WAL detector only, no --table required)")
 	initCmd.Flags().String("adapter", "", "adapter type: pg_table, embedding, outbox, or signal (generates table SQL)")
 	initCmd.Flags().Int("dimension", 1536, "vector dimension for embedding adapter (default: 1536)")
-	_ = initCmd.MarkFlagRequired("table")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
 	table, _ := cmd.Flags().GetString("table")
 	detectorType, _ := cmd.Flags().GetString("detector")
 	adapterType, _ := cmd.Flags().GetString("adapter")
+	allTables, _ := cmd.Flags().GetBool("all-tables")
 
+	if allTables {
+		if detectorType != "wal" {
+			return fmt.Errorf("--all-tables only works with --detector wal")
+		}
+		return runInitWALAllTables(cmd)
+	}
+
+	// Without --all-tables, --table is required.
+	if table == "" {
+		return fmt.Errorf("--table is required")
+	}
 	if !validTableName.MatchString(table) {
 		return fmt.Errorf("invalid table name %q: only alphanumeric characters and underscores are allowed", table)
 	}
@@ -273,5 +287,19 @@ func runInitSignal(table string) error {
 		return fmt.Errorf("execute template: %w", err)
 	}
 
+	return nil
+}
+
+func runInitWALAllTables(cmd *cobra.Command) error {
+	publication, _ := cmd.Flags().GetString("publication")
+	if publication == "" {
+		publication = "all"
+	}
+	if !validPublicationName.MatchString(publication) {
+		return fmt.Errorf("invalid publication name %q: only alphanumeric characters and underscores are allowed", publication)
+	}
+	fmt.Printf("-- pgcdc WAL logical replication: all tables\n")
+	fmt.Printf("-- Prerequisites: wal_level=logical, REPLICATION privilege\n\n")
+	fmt.Printf("CREATE PUBLICATION %s FOR ALL TABLES;\n", pgx.Identifier{publication}.Sanitize())
 	return nil
 }
