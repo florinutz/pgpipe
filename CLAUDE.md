@@ -1,6 +1,6 @@
 # pgcdc
 
-PostgreSQL change data capture (LISTEN/NOTIFY, WAL logical replication, or outbox pattern) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Typesense/Meilisearch, Redis, and gRPC.
+PostgreSQL change data capture (LISTEN/NOTIFY, WAL logical replication, or outbox pattern) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, and gRPC.
 
 ## Quick Start
 
@@ -29,6 +29,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
                     |                   ──> Adapter (SSE broker)  ──> HTTP server
               ingest chan               ──> Adapter (WS broker)   ──> HTTP server
                                         ──> Adapter (NATS JetStream)
+                                        ──> Adapter (Kafka)          ──> DLQ
                                         ──> Adapter (search: Typesense/Meilisearch)
                                         ──> Adapter (redis: invalidate/sync)
                                         ──> Adapter (gRPC streaming)
@@ -52,7 +53,8 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **Search adapter**: `--adapter search` syncs to Typesense or Meilisearch. Batched upserts, individual deletes. `--search-engine`, `--search-url`, `--search-api-key`, `--search-index`.
 - **Redis adapter**: `--adapter redis` for cache invalidation (`DEL` on any change) or sync (`SET`/`DEL`). `--redis-url`, `--redis-mode invalidate|sync`, `--redis-key-prefix`.
 - **gRPC adapter**: `--adapter grpc` starts a gRPC streaming server. Clients call `Subscribe(SubscribeRequest)` with optional channel filter. Proto at `adapter/grpc/proto/pgcdc.proto`.
-- **Dead letter queue**: `--dlq stderr|pg_table|none`. Failed events captured to stderr (JSON lines) or `pgcdc_dead_letters` table. Adapters with DLQ support: webhook, embedding.
+- **Dead letter queue**: `--dlq stderr|pg_table|none`. Failed events captured to stderr (JSON lines) or `pgcdc_dead_letters` table. Adapters with DLQ support: webhook, embedding, kafka.
+- **Kafka adapter**: `--adapter kafka` publishes events to Kafka topics with per-event key (`event.ID`), headers (`pgcdc-channel`, `pgcdc-operation`, `pgcdc-event-id`), and `RequireAll` acks. Channel-to-topic mapping: `pgcdc:orders` → `pgcdc.orders`. `--kafka-topic` overrides with a fixed topic. SASL (plain, SCRAM-SHA-256/512) and TLS supported. Terminal Kafka errors (non-retriable) go to DLQ; connection errors trigger reconnect with backoff.
 - **Event routing**: `--route adapter=channel1,channel2`. Bus-level filtering before fan-out. Adapters without routes receive all events.
 - **Outbox detector**: `--detector outbox` polls a transactional outbox table using `SELECT ... FOR UPDATE SKIP LOCKED` for concurrency-safe processing. Configurable DELETE or `processed_at` update cleanup.
 - **Shutdown**: Signal cancels root context. Bus closes subscriber channels. HTTP server gets `shutdown_timeout` (default 5s) `context.WithTimeout` for graceful drain.
@@ -110,15 +112,14 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - Use a connection pool for detectors — breaks LISTEN state
 - Close the events channel from a detector — bus owns lifecycle
 - Block in SSE or WS broadcast — non-blocking sends only (bus reliable mode is explicitly opt-in via `--bus-mode reliable`)
-- Add external brokers (Redis, Kafka) — zero infra beyond PG is a design choice
 - Use `log` or `fmt.Printf` — slog only
 - Put raw SQL identifiers in Go strings — use `pgx.Identifier{}.Sanitize()`
-- Add dependencies without justification — prefer stdlib (exception: `nats.go` for NATS adapter)
+- Add dependencies without justification — prefer stdlib (exceptions: `nats.go` for NATS adapter, `segmentio/kafka-go` for Kafka adapter)
 - Hardcode timeouts or backoff values — put them in config with defaults
 
 ## Dependencies
 
-Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `testcontainers-go` (test only).
+Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `segmentio/kafka-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `testcontainers-go` (test only).
 
 ## Testing
 
@@ -202,6 +203,7 @@ adapter/        Output adapter interface + implementations
   ws/           WebSocket broker
   embedding/    Embed text columns → UPSERT into pgvector table
   nats/         NATS JetStream publish
+  kafka/        Kafka topic publish
   search/       Typesense / Meilisearch sync
   redis/        Redis cache invalidation / sync
   grpc/         gRPC streaming server
@@ -244,6 +246,7 @@ testutil/       Test utilities
 - `pgcdcerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError, EmbeddingDeliveryError, NatsPublishError, OutboxProcessError, IcebergFlushError, IncrementalSnapshotError)
 - `adapter/embedding/embedding.go` — Embedding adapter: OpenAI-compatible API + pgvector UPSERT/DELETE
 - `adapter/nats/nats.go` — NATS JetStream adapter: publish with dedup + auto-stream creation
+- `adapter/kafka/kafka.go` — Kafka adapter: publish with RequireAll acks, SASL/TLS, DLQ for terminal errors
 - `adapter/search/search.go` — Search adapter: Typesense/Meilisearch sync with batching
 - `adapter/redis/redis.go` — Redis adapter: cache invalidation (DEL) or sync (SET/DEL)
 - `adapter/grpc/grpc.go` — gRPC streaming adapter: broker pattern like SSE/WS

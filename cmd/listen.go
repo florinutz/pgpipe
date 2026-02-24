@@ -18,6 +18,7 @@ import (
 	fileadapter "github.com/florinutz/pgcdc/adapter/file"
 	grpcadapter "github.com/florinutz/pgcdc/adapter/grpc"
 	icebergadapter "github.com/florinutz/pgcdc/adapter/iceberg"
+	kafkaadapter "github.com/florinutz/pgcdc/adapter/kafka"
 	natsadapter "github.com/florinutz/pgcdc/adapter/nats"
 	"github.com/florinutz/pgcdc/adapter/pgtable"
 	redisadapter "github.com/florinutz/pgcdc/adapter/redis"
@@ -148,6 +149,15 @@ func init() {
 	f.String("nats-cred-file", "", "NATS credentials file")
 	f.Duration("nats-max-age", 0, "NATS stream max message age (default 24h)")
 
+	// Kafka adapter flags.
+	f.StringSlice("kafka-brokers", []string{"localhost:9092"}, "Kafka broker addresses")
+	f.String("kafka-topic", "", "fixed Kafka topic (empty = per-channel, pgcdc:orders→pgcdc.orders)")
+	f.String("kafka-sasl-mechanism", "", "SASL mechanism: plain, scram-sha-256, scram-sha-512")
+	f.String("kafka-sasl-username", "", "SASL username")
+	f.String("kafka-sasl-password", "", "SASL password")
+	f.Bool("kafka-tls", false, "enable TLS for Kafka connection")
+	f.String("kafka-tls-ca-file", "", "CA certificate file for Kafka TLS")
+
 	// DLQ flags.
 	f.String("dlq", "stderr", "dead letter queue backend: stderr, pg_table, or none")
 	f.String("dlq-table", "pgcdc_dead_letters", "DLQ table name (for pg_table backend)")
@@ -219,6 +229,14 @@ func init() {
 	mustBindPFlag("nats.stream", f.Lookup("nats-stream"))
 	mustBindPFlag("nats.cred_file", f.Lookup("nats-cred-file"))
 	mustBindPFlag("nats.max_age", f.Lookup("nats-max-age"))
+
+	mustBindPFlag("kafka.brokers", f.Lookup("kafka-brokers"))
+	mustBindPFlag("kafka.topic", f.Lookup("kafka-topic"))
+	mustBindPFlag("kafka.sasl_mechanism", f.Lookup("kafka-sasl-mechanism"))
+	mustBindPFlag("kafka.sasl_username", f.Lookup("kafka-sasl-username"))
+	mustBindPFlag("kafka.sasl_password", f.Lookup("kafka-sasl-password"))
+	mustBindPFlag("kafka.tls", f.Lookup("kafka-tls"))
+	mustBindPFlag("kafka.tls_ca_file", f.Lookup("kafka-tls-ca-file"))
 
 	mustBindPFlag("embedding.api_url", f.Lookup("embedding-api-url"))
 	mustBindPFlag("embedding.api_key", f.Lookup("embedding-api-key"))
@@ -345,6 +363,7 @@ func runListen(cmd *cobra.Command, args []string) error {
 	hasNats := false
 	hasSearch := false
 	hasRedis := false
+	hasKafka := false
 	for _, name := range cfg.Adapters {
 		switch name {
 		case "stdout":
@@ -371,10 +390,12 @@ func runListen(cmd *cobra.Command, args []string) error {
 			hasSearch = true
 		case "redis":
 			hasRedis = true
+		case "kafka":
+			hasKafka = true
 		case "grpc":
 			// gRPC adapter has no required config (addr has default).
 		default:
-			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, or grpc)", name)
+			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, kafka, or grpc)", name)
 		}
 	}
 	if hasWebhook && cfg.Webhook.URL == "" {
@@ -415,6 +436,9 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 	if hasRedis && cfg.Redis.URL == "" {
 		return fmt.Errorf("redis adapter requires a URL; use --redis-url or set redis.url in config")
+	}
+	if hasKafka && len(cfg.Kafka.Brokers) == 0 {
+		return fmt.Errorf("kafka adapter requires at least one broker; use --kafka-brokers or set kafka.brokers in config")
 	}
 
 	logger := slog.Default()
@@ -640,6 +664,19 @@ func runListen(cmd *cobra.Command, args []string) error {
 		case "grpc":
 			opts = append(opts, pgcdc.WithAdapter(grpcadapter.New(
 				cfg.GRPC.Addr,
+				logger,
+			)))
+		case "kafka":
+			opts = append(opts, pgcdc.WithAdapter(kafkaadapter.New(
+				cfg.Kafka.Brokers,
+				cfg.Kafka.Topic,
+				cfg.Kafka.SASLMechanism,
+				cfg.Kafka.SASLUsername,
+				cfg.Kafka.SASLPassword,
+				cfg.Kafka.TLSCAFile,
+				cfg.Kafka.TLS,
+				cfg.Kafka.BackoffBase,
+				cfg.Kafka.BackoffCap,
 				logger,
 			)))
 		}
