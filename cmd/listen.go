@@ -26,6 +26,7 @@ import (
 	"github.com/florinutz/pgcdc/adapter/stdout"
 	"github.com/florinutz/pgcdc/adapter/webhook"
 	"github.com/florinutz/pgcdc/adapter/ws"
+	"github.com/florinutz/pgcdc/bus"
 	"github.com/florinutz/pgcdc/checkpoint"
 	"github.com/florinutz/pgcdc/detector"
 	"github.com/florinutz/pgcdc/detector/listennotify"
@@ -35,6 +36,7 @@ import (
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/internal/server"
 	"github.com/florinutz/pgcdc/snapshot"
+	"github.com/florinutz/pgcdc/transform"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
@@ -178,6 +180,16 @@ func init() {
 	f.Int("outbox-batch-size", 100, "outbox batch size per poll")
 	f.Bool("outbox-keep-processed", false, "keep processed outbox rows (set processed_at instead of DELETE)")
 
+	// Bus mode flag.
+	f.String("bus-mode", "fast", "bus fan-out mode: fast (drop on full) or reliable (block on full)")
+
+	// Cooperative checkpoint flag (read directly, not viper-bound).
+	f.Bool("cooperative-checkpoint", false, "checkpoint advances only after all adapters acknowledge (requires --persistent-slot and --detector wal)")
+
+	// Transform flags (read directly, not viper-bound — same pattern as --snapshot-first).
+	f.StringSlice("drop-columns", nil, "global: drop these columns from event payloads (repeatable)")
+	f.StringSlice("filter-operations", nil, "global: only pass events with these operations (e.g. INSERT,UPDATE)")
+
 	mustBindPFlag("dlq.type", f.Lookup("dlq"))
 	mustBindPFlag("dlq.table", f.Lookup("dlq-table"))
 	mustBindPFlag("dlq.db_url", f.Lookup("dlq-db"))
@@ -216,6 +228,8 @@ func init() {
 	mustBindPFlag("embedding.table", f.Lookup("embedding-table"))
 	mustBindPFlag("embedding.db_url", f.Lookup("embedding-db-url"))
 	mustBindPFlag("embedding.dimension", f.Lookup("embedding-dimension"))
+
+	mustBindPFlag("bus.mode", f.Lookup("bus-mode"))
 
 	mustBindPFlag("channels", f.Lookup("channel"))
 	mustBindPFlag("adapters", f.Lookup("adapter"))
@@ -276,6 +290,20 @@ func runListen(cmd *cobra.Command, args []string) error {
 	snapshotChunkDelay, _ := cmd.Flags().GetDuration("snapshot-chunk-delay")
 	snapshotProgressDB, _ := cmd.Flags().GetString("snapshot-progress-db")
 
+	// Cooperative checkpoint flag (read directly to avoid viper collisions).
+	cooperativeCheckpoint, _ := cmd.Flags().GetBool("cooperative-checkpoint")
+
+	// Parse bus mode from config.
+	var busMode bus.BusMode
+	switch cfg.Bus.Mode {
+	case "reliable":
+		busMode = bus.BusModeReliable
+	case "fast", "":
+		busMode = bus.BusModeFast
+	default:
+		return fmt.Errorf("unknown bus mode: %q (expected fast or reliable)", cfg.Bus.Mode)
+	}
+
 	// Validation.
 	if cfg.Detector.Type != "wal" && (cfg.Detector.TxMetadata || cfg.Detector.TxMarkers) {
 		return fmt.Errorf("--tx-metadata and --tx-markers require --detector wal")
@@ -291,6 +319,12 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 	if snapshotFirst && cfg.Detector.Type != "wal" {
 		return fmt.Errorf("--snapshot-first requires --detector wal")
+	}
+	if cooperativeCheckpoint && cfg.Detector.Type != "wal" {
+		return fmt.Errorf("--cooperative-checkpoint requires --detector wal")
+	}
+	if cooperativeCheckpoint && !persistentSlot {
+		return fmt.Errorf("--cooperative-checkpoint requires --persistent-slot")
 	}
 	if snapshotFirst && snapshotTable == "" {
 		return fmt.Errorf("--snapshot-first requires --snapshot-table")
@@ -392,7 +426,11 @@ func runListen(cmd *cobra.Command, args []string) error {
 	// Build pipeline options (declared early so detector can append).
 	opts := []pgcdc.Option{
 		pgcdc.WithBusBuffer(cfg.Bus.BufferSize),
+		pgcdc.WithBusMode(busMode),
 		pgcdc.WithLogger(logger),
+	}
+	if cooperativeCheckpoint {
+		opts = append(opts, pgcdc.WithCooperativeCheckpoint(true))
 	}
 
 	// Set up DLQ.
@@ -607,6 +645,10 @@ func runListen(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build transform options from CLI flags and config.
+	transformOpts := buildTransformOpts(cfg, cmd)
+	opts = append(opts, transformOpts...)
+
 	// Build pipeline.
 	p := pgcdc.NewPipeline(det, opts...)
 	defer func() { _ = dlqInstance.Close() }()
@@ -681,4 +723,80 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 
 	return err
+}
+
+// buildTransformOpts parses CLI flags and config to produce pipeline transform options.
+func buildTransformOpts(cfg config.Config, cmd *cobra.Command) []pgcdc.Option {
+	var opts []pgcdc.Option
+
+	// CLI flag shortcuts → global transforms.
+	if cols, _ := cmd.Flags().GetStringSlice("drop-columns"); len(cols) > 0 {
+		opts = append(opts, pgcdc.WithTransform(transform.DropColumns(cols...)))
+	}
+	if ops, _ := cmd.Flags().GetStringSlice("filter-operations"); len(ops) > 0 {
+		opts = append(opts, pgcdc.WithTransform(transform.FilterOperation(ops...)))
+	}
+
+	// Config file: global transforms.
+	for _, spec := range cfg.Transforms.Global {
+		if fn := specToTransform(spec); fn != nil {
+			opts = append(opts, pgcdc.WithTransform(fn))
+		}
+	}
+
+	// Config file: per-adapter transforms.
+	for adapterName, specs := range cfg.Transforms.Adapter {
+		for _, spec := range specs {
+			if fn := specToTransform(spec); fn != nil {
+				opts = append(opts, pgcdc.WithAdapterTransform(adapterName, fn))
+			}
+		}
+	}
+
+	return opts
+}
+
+// specToTransform converts a config TransformSpec into a TransformFunc.
+func specToTransform(spec config.TransformSpec) transform.TransformFunc {
+	switch spec.Type {
+	case "drop_columns":
+		if len(spec.Columns) == 0 {
+			return nil
+		}
+		return transform.DropColumns(spec.Columns...)
+	case "rename_fields":
+		if len(spec.Mapping) == 0 {
+			return nil
+		}
+		return transform.RenameFields(spec.Mapping)
+	case "mask":
+		if len(spec.Fields) == 0 {
+			return nil
+		}
+		fields := make([]transform.MaskField, len(spec.Fields))
+		for i, f := range spec.Fields {
+			fields[i] = transform.MaskField{
+				Field: f.Field,
+				Mode:  transform.MaskMode(f.Mode),
+			}
+		}
+		return transform.Mask(fields...)
+	case "filter":
+		if len(spec.Filter.Operations) > 0 {
+			return transform.FilterOperation(spec.Filter.Operations...)
+		}
+		if spec.Filter.Field != "" && len(spec.Filter.In) > 0 {
+			vals := make([]any, len(spec.Filter.In))
+			for i, v := range spec.Filter.In {
+				vals[i] = v
+			}
+			return transform.FilterFieldIn(spec.Filter.Field, vals...)
+		}
+		if spec.Filter.Field != "" && spec.Filter.Equals != "" {
+			return transform.FilterField(spec.Filter.Field, spec.Filter.Equals)
+		}
+		return nil
+	default:
+		return nil
+	}
 }

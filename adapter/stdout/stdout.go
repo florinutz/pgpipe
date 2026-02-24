@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/florinutz/pgcdc/adapter"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/metrics"
 )
@@ -18,6 +19,7 @@ import (
 type Adapter struct {
 	w      io.Writer
 	logger *slog.Logger
+	ackFn  adapter.AckFunc
 }
 
 // New creates a stdout adapter that writes JSON-lines to w.
@@ -34,6 +36,9 @@ func New(w io.Writer, logger *slog.Logger) *Adapter {
 		logger: logger,
 	}
 }
+
+// SetAckFunc implements adapter.Acknowledger.
+func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
 
 // Start blocks, consuming events from the channel and writing each one as a
 // JSON line to the underlying writer. It returns nil when the channel is closed
@@ -58,6 +63,9 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 				return fmt.Errorf("stdout adapter: encode event %s: %w", ev.ID, err)
 			}
 			metrics.EventsDelivered.WithLabelValues("stdout").Inc()
+			if a.ackFn != nil && ev.LSN > 0 {
+				a.ackFn(ev.LSN)
+			}
 		}
 	}
 }

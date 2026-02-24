@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/florinutz/pgcdc/adapter"
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
@@ -39,10 +40,14 @@ type Adapter struct {
 	client      *http.Client
 	logger      *slog.Logger
 	dlq         dlq.DLQ
+	ackFn       adapter.AckFunc
 }
 
 // SetDLQ sets the dead letter queue for failed deliveries.
 func (a *Adapter) SetDLQ(d dlq.DLQ) { a.dlq = d }
+
+// SetAckFunc implements adapter.Acknowledger.
+func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
 
 // New creates a webhook adapter. If maxRetries is <= 0 it defaults to 5.
 // If logger is nil a no-op logger is used. Duration parameters default
@@ -105,6 +110,10 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 						a.logger.Error("dlq record failed", "error", dlqErr)
 					}
 				}
+			}
+			// Ack after terminal outcome (delivery, DLQ record, or non-retryable skip).
+			if a.ackFn != nil && ev.LSN > 0 {
+				a.ackFn(ev.LSN)
 			}
 		}
 	}

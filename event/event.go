@@ -31,6 +31,7 @@ type Event struct {
 	Source      string           `json:"source"`
 	CreatedAt   time.Time        `json:"created_at"`
 	Transaction *TransactionInfo `json:"transaction,omitempty"`
+	LSN         uint64           `json:"-"` // WAL position; 0 for non-WAL sources and snapshot events
 }
 
 func New(channel, operation string, payload json.RawMessage, source string) (Event, error) {

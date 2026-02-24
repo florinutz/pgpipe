@@ -261,4 +261,35 @@ var (
 		Name: "pgcdc_grpc_events_sent_total",
 		Help: "Total number of events sent to gRPC clients.",
 	})
+
+	// Bus backpressure metric (reliable mode).
+
+	BusBackpressure = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_bus_backpressure_total",
+		Help: "Events that required blocking send in reliable bus mode.",
+	}, []string{"adapter"})
+
+	// Cooperative checkpoint metrics.
+
+	AckPosition = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pgcdc_ack_position",
+		Help: "Highest acknowledged LSN per adapter.",
+	}, []string{"adapter"})
+
+	CooperativeCheckpointLSN = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_cooperative_checkpoint_lsn",
+		Help: "Cooperative checkpoint LSN (minimum across all adapters).",
+	})
+
+	// Transform metrics.
+
+	TransformDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_transform_dropped_total",
+		Help: "Total number of events dropped by transforms.",
+	}, []string{"adapter"})
+
+	TransformErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_transform_errors_total",
+		Help: "Total number of transform errors.",
+	}, []string{"adapter"})
 )
