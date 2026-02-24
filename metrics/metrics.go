@@ -186,6 +186,24 @@ var (
 		Help: "Total number of NATS publish errors.",
 	})
 
+	// Kafka adapter metrics.
+
+	KafkaPublished = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_kafka_published_total",
+		Help: "Total number of events published to Kafka.",
+	})
+
+	KafkaPublishDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "pgcdc_kafka_publish_duration_seconds",
+		Help:    "Duration of Kafka publish operations.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	KafkaErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_kafka_errors_total",
+		Help: "Total number of Kafka publish errors.",
+	})
+
 	// Outbox metrics.
 
 	OutboxPolled = promauto.NewCounter(prometheus.CounterOpts{

@@ -33,6 +33,8 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | 26 | Transform pipeline | `transform_test.go` | NOTIFY → detector → bus → transform chain (drop columns, mask, rename) → stdout outputs transformed payload | Filter drops non-matching events: FilterField("op","UPDATE") drops INSERT, passes UPDATE |
 | 27 | Cooperative checkpoint | `cooperative_checkpoint_test.go` | WAL+persistent slot+reliable bus mode: stdout adapter acks events, checkpoint advances to min acked LSN | Slow adapter delays checkpoint: checkpoint stalls at slow adapter's position, advances after release |
 
+| 28 | Kafka delivery | `kafka_test.go` | NOTIFY → detector → bus → kafka adapter publishes to topic with correct key/headers; channel name maps to topic (`pgcdc:orders`→`pgcdc.orders`) | Terminal topic error: event recorded to DLQ, adapter continues |
+
 ## Adding a new scenario
 
 1. Create `scenarios/<name>_test.go`

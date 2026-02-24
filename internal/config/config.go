@@ -27,6 +27,7 @@ type Config struct {
 	Search              SearchConfig              `mapstructure:"search"`
 	Redis               RedisConfig               `mapstructure:"redis"`
 	GRPC                GRPCConfig                `mapstructure:"grpc"`
+	Kafka               KafkaConfig               `mapstructure:"kafka"`
 	IncrementalSnapshot IncrementalSnapshotConfig `mapstructure:"incremental_snapshot"`
 	Transforms          TransformConfig           `mapstructure:"transforms"`
 }
@@ -180,6 +181,18 @@ type GRPCConfig struct {
 	Addr string `mapstructure:"addr"`
 }
 
+type KafkaConfig struct {
+	Brokers       []string      `mapstructure:"brokers"`
+	Topic         string        `mapstructure:"topic"`
+	SASLMechanism string        `mapstructure:"sasl_mechanism"`
+	SASLUsername  string        `mapstructure:"sasl_username"`
+	SASLPassword  string        `mapstructure:"sasl_password"`
+	TLS           bool          `mapstructure:"tls"`
+	TLSCAFile     string        `mapstructure:"tls_ca_file"`
+	BackoffBase   time.Duration `mapstructure:"backoff_base"`
+	BackoffCap    time.Duration `mapstructure:"backoff_cap"`
+}
+
 type IncrementalSnapshotConfig struct {
 	Enabled     bool          `mapstructure:"enabled"`
 	SignalTable string        `mapstructure:"signal_table"`
@@ -308,6 +321,11 @@ func Default() Config {
 		},
 		GRPC: GRPCConfig{
 			Addr: ":9090",
+		},
+		Kafka: KafkaConfig{
+			Brokers:     []string{"localhost:9092"},
+			BackoffBase: 1 * time.Second,
+			BackoffCap:  30 * time.Second,
 		},
 		IncrementalSnapshot: IncrementalSnapshotConfig{
 			SignalTable: "pgcdc_signals",
