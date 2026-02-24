@@ -88,6 +88,11 @@ type Detector struct {
 	progressStore      snapshot.ProgressStore
 	activeSnapshots    map[string]context.CancelFunc // table -> cancel
 	snapshotMu         sync.Mutex
+
+	// Cooperative checkpointing: when set, the standby status update and
+	// checkpoint use the minimum acked LSN across all adapters instead of
+	// the detector's own receive position.
+	cooperativeLSNFn func() uint64
 }
 
 // txState tracks the current transaction when txMetadata is enabled.
@@ -188,6 +193,14 @@ func (d *Detector) SetIncrementalSnapshot(signalTable string, chunkSize int, chu
 // SetProgressStore sets the progress store for incremental snapshot persistence.
 func (d *Detector) SetProgressStore(store snapshot.ProgressStore) {
 	d.progressStore = store
+}
+
+// SetCooperativeLSN sets a function that returns the minimum acknowledged LSN
+// across all adapters. When set, standby status updates and checkpoints use
+// this value instead of the detector's own receive position, preventing WAL
+// recycling past what adapters have confirmed.
+func (d *Detector) SetCooperativeLSN(fn func() uint64) {
+	d.cooperativeLSNFn = fn
 }
 
 // Start connects to PostgreSQL, creates a temporary replication slot, and
@@ -375,18 +388,28 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 
 	for {
 		if time.Now().After(nextStatusDeadline) {
+			// Use cooperative LSN (min acked by all adapters) if available,
+			// otherwise use the detector's own receive position.
+			reportLSN := clientXLogPos
+			if d.cooperativeLSNFn != nil {
+				coopLSN := pglogrepl.LSN(d.cooperativeLSNFn())
+				if coopLSN > 0 && coopLSN <= clientXLogPos {
+					reportLSN = coopLSN
+				}
+			}
+
 			err := pglogrepl.SendStandbyStatusUpdate(ctx, conn,
-				pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
+				pglogrepl.StandbyStatusUpdate{WALWritePosition: reportLSN})
 			if err != nil {
 				return fmt.Errorf("send standby status: %w", err)
 			}
 
 			// Checkpoint after successful standby status update.
-			if d.checkpointStore != nil && clientXLogPos > 0 {
-				if saveErr := d.checkpointStore.Save(ctx, slotName, uint64(clientXLogPos)); saveErr != nil {
+			if d.checkpointStore != nil && reportLSN > 0 {
+				if saveErr := d.checkpointStore.Save(ctx, slotName, uint64(reportLSN)); saveErr != nil {
 					d.logger.Warn("failed to save checkpoint", "error", saveErr)
 				} else {
-					metrics.CheckpointLSN.Set(float64(clientXLogPos))
+					metrics.CheckpointLSN.Set(float64(reportLSN))
 					metrics.CheckpointTotal.Inc()
 				}
 			}
@@ -448,7 +471,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if d.schemaEvents {
 					if oldRel, exists := relations[m.RelationID]; exists {
 						if changes := diffRelation(oldRel, m); len(changes) > 0 {
-							if err := d.emitSchemaChange(ctx, events, m, changes); err != nil {
+							if err := d.emitSchemaChange(ctx, events, m, changes, clientXLogPos); err != nil {
 								return fmt.Errorf("emit schema change: %w", err)
 							}
 						}
@@ -461,14 +484,14 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 					currentTx = &txState{xid: m.Xid, commitTime: m.CommitTime}
 				}
 				if d.txMarkers {
-					if err := d.emitMarker(ctx, events, "BEGIN", m.Xid, m.CommitTime, 0); err != nil {
+					if err := d.emitMarker(ctx, events, "BEGIN", m.Xid, m.CommitTime, 0, clientXLogPos); err != nil {
 						return err
 					}
 				}
 
 			case *pglogrepl.CommitMessage:
 				if d.txMarkers && currentTx != nil {
-					if err := d.emitMarker(ctx, events, "COMMIT", currentTx.xid, currentTx.commitTime, currentTx.seq); err != nil {
+					if err := d.emitMarker(ctx, events, "COMMIT", currentTx.xid, currentTx.commitTime, currentTx.seq, clientXLogPos); err != nil {
 						return err
 					}
 				}
@@ -478,7 +501,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "INSERT", m.Tuple, nil, currentTx); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, "INSERT", m.Tuple, nil, currentTx, clientXLogPos); err != nil {
 					return err
 				}
 				if d.incrementalEnabled {
@@ -491,7 +514,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "UPDATE", m.NewTuple, m.OldTuple, currentTx); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, "UPDATE", m.NewTuple, m.OldTuple, currentTx, clientXLogPos); err != nil {
 					return err
 				}
 
@@ -499,7 +522,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "DELETE", nil, m.OldTuple, currentTx); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, "DELETE", nil, m.OldTuple, currentTx, clientXLogPos); err != nil {
 					return err
 				}
 
@@ -511,6 +534,8 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 }
 
 // emitEvent builds an event from WAL data and sends it to the events channel.
+// currentLSN is the WAL position at which this change was received; it is
+// stored on the event for cooperative checkpointing.
 func (d *Detector) emitEvent(
 	ctx context.Context,
 	events chan<- event.Event,
@@ -520,6 +545,7 @@ func (d *Detector) emitEvent(
 	newTuple *pglogrepl.TupleData,
 	oldTuple *pglogrepl.TupleData,
 	tx *txState,
+	currentLSN pglogrepl.LSN,
 ) error {
 	rel, ok := relations[relationID]
 	if !ok {
@@ -584,6 +610,8 @@ func (d *Detector) emitEvent(
 		}
 	}
 
+	ev.LSN = uint64(currentLSN)
+
 	select {
 	case events <- ev:
 	case <-ctx.Done():
@@ -593,7 +621,8 @@ func (d *Detector) emitEvent(
 }
 
 // emitMarker sends a synthetic BEGIN or COMMIT marker event.
-func (d *Detector) emitMarker(ctx context.Context, events chan<- event.Event, op string, xid uint32, commitTime time.Time, eventCount int) error {
+// currentLSN is stored on the event for cooperative checkpointing.
+func (d *Detector) emitMarker(ctx context.Context, events chan<- event.Event, op string, xid uint32, commitTime time.Time, eventCount int, currentLSN pglogrepl.LSN) error {
 	payload := map[string]any{
 		"xid":         xid,
 		"commit_time": commitTime,
@@ -613,6 +642,8 @@ func (d *Detector) emitMarker(ctx context.Context, events chan<- event.Event, op
 		d.logger.Error("create marker event failed", "error", err)
 		return nil
 	}
+
+	ev.LSN = uint64(currentLSN)
 
 	select {
 	case events <- ev:
@@ -750,7 +781,8 @@ func (d *Detector) runSlotLagMonitor(ctx context.Context, slotName string) {
 }
 
 // emitSchemaChange sends a synthetic SCHEMA_CHANGE event.
-func (d *Detector) emitSchemaChange(ctx context.Context, events chan<- event.Event, rel *pglogrepl.RelationMessage, changes []schemaChange) error {
+// currentLSN is stored on the event for cooperative checkpointing.
+func (d *Detector) emitSchemaChange(ctx context.Context, events chan<- event.Event, rel *pglogrepl.RelationMessage, changes []schemaChange, currentLSN pglogrepl.LSN) error {
 	d.logger.Warn("schema change detected",
 		"table", rel.RelationName,
 		"schema", rel.Namespace,
@@ -775,6 +807,8 @@ func (d *Detector) emitSchemaChange(ctx context.Context, events chan<- event.Eve
 		d.logger.Error("create schema change event failed", "error", err)
 		return nil
 	}
+
+	ev.LSN = uint64(currentLSN)
 
 	select {
 	case events <- ev:

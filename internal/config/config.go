@@ -28,10 +28,12 @@ type Config struct {
 	Redis               RedisConfig               `mapstructure:"redis"`
 	GRPC                GRPCConfig                `mapstructure:"grpc"`
 	IncrementalSnapshot IncrementalSnapshotConfig `mapstructure:"incremental_snapshot"`
+	Transforms          TransformConfig           `mapstructure:"transforms"`
 }
 
 type BusConfig struct {
-	BufferSize int `mapstructure:"buffer_size"`
+	BufferSize int    `mapstructure:"buffer_size"`
+	Mode       string `mapstructure:"mode"` // "fast" (default) or "reliable"
 }
 
 type WebhookConfig struct {
@@ -184,6 +186,31 @@ type IncrementalSnapshotConfig struct {
 	ChunkSize   int           `mapstructure:"chunk_size"`
 	ChunkDelay  time.Duration `mapstructure:"chunk_delay"`
 	ProgressDB  string        `mapstructure:"progress_db"`
+}
+
+type TransformConfig struct {
+	Global  []TransformSpec            `mapstructure:"global"`
+	Adapter map[string][]TransformSpec `mapstructure:"adapter"`
+}
+
+type TransformSpec struct {
+	Type    string            `mapstructure:"type"`    // drop_columns, rename_fields, mask, filter
+	Columns []string          `mapstructure:"columns"` // for drop_columns
+	Mapping map[string]string `mapstructure:"mapping"` // for rename_fields
+	Fields  []MaskFieldSpec   `mapstructure:"fields"`  // for mask
+	Filter  FilterSpec        `mapstructure:"filter"`  // for filter
+}
+
+type MaskFieldSpec struct {
+	Field string `mapstructure:"field"`
+	Mode  string `mapstructure:"mode"`
+}
+
+type FilterSpec struct {
+	Field      string   `mapstructure:"field"`
+	Equals     string   `mapstructure:"equals"`
+	In         []string `mapstructure:"in"`
+	Operations []string `mapstructure:"operations"`
 }
 
 func Default() Config {

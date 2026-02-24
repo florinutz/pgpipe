@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/florinutz/pgcdc/adapter"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/metrics"
@@ -26,7 +27,11 @@ type Adapter struct {
 	backoffBase time.Duration
 	backoffCap  time.Duration
 	logger      *slog.Logger
+	ackFn       adapter.AckFunc
 }
+
+// SetAckFunc implements adapter.Acknowledger.
+func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
 
 // New creates a pg_table adapter. The table must already exist.
 // Duration parameters default to sensible values when zero.
@@ -135,6 +140,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 			if err != nil {
 				// Check if this is a connection-level error (worth reconnecting for).
 				if conn.IsClosed() {
+					// Do NOT ack: event is lost on reconnect (pre-existing limitation).
 					return fmt.Errorf("insert (connection lost): %w", err)
 				}
 				// Non-connection error (e.g., constraint violation): log and skip.
@@ -142,9 +148,16 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 					"event_id", ev.ID,
 					"error", err,
 				)
+				// Ack intentional skip: we are done with this event.
+				if a.ackFn != nil && ev.LSN > 0 {
+					a.ackFn(ev.LSN)
+				}
 				continue
 			}
 			metrics.EventsDelivered.WithLabelValues("pg_table").Inc()
+			if a.ackFn != nil && ev.LSN > 0 {
+				a.ackFn(ev.LSN)
+			}
 		}
 	}
 }

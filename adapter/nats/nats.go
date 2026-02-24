@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/florinutz/pgcdc/adapter"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/metrics"
@@ -28,7 +29,11 @@ type Adapter struct {
 	backoffBase   time.Duration
 	backoffCap    time.Duration
 	logger        *slog.Logger
+	ackFn         adapter.AckFunc
 }
+
+// SetAckFunc implements adapter.Acknowledger.
+func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
 
 // New creates a NATS JetStream adapter. Duration parameters default to sensible
 // values when zero.
@@ -161,12 +166,15 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 
 			if err != nil {
 				metrics.NatsErrors.Inc()
-				// Return error to trigger reconnect.
+				// Do NOT ack: return error to trigger reconnect (event is lost — pre-existing limitation).
 				return fmt.Errorf("publish event %s: %w", ev.ID, err)
 			}
 
 			metrics.NatsPublished.Inc()
 			metrics.EventsDelivered.WithLabelValues(adapterName).Inc()
+			if a.ackFn != nil && ev.LSN > 0 {
+				a.ackFn(ev.LSN)
+			}
 		}
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/florinutz/pgcdc/adapter/webhook"
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/snapshot"
+	"github.com/florinutz/pgcdc/transform"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
@@ -101,6 +102,10 @@ func init() {
 	f.String("redis-mode", "invalidate", "Redis mode: invalidate or sync")
 	f.String("redis-key-prefix", "", "Redis key prefix")
 	f.String("redis-id-column", "id", "row ID column for Redis keys")
+
+	// Transform flags (read directly, not viper-bound).
+	f.StringSlice("drop-columns", nil, "global: drop these columns from event payloads (repeatable)")
+	f.StringSlice("filter-operations", nil, "global: only pass events with these operations (e.g. INSERT,UPDATE)")
 
 	// Only bind snapshot-specific keys that don't collide with listen.
 	mustBindPFlag("snapshot.table", f.Lookup("table"))
@@ -449,6 +454,9 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build transform options from CLI flags and config.
+	opts = append(opts, buildSnapshotTransformOpts(cfg, cmd)...)
+
 	// Create a snapshot-only pipeline: snapshot feeds into bus -> adapters.
 	snap := snapshot.New(cfg.DatabaseURL, cfg.Snapshot.Table, cfg.Snapshot.Where, cfg.Snapshot.BatchSize, logger)
 	p := pgcdc.NewSnapshotPipeline(snap, opts...)
@@ -465,4 +473,36 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return err
+}
+
+// buildSnapshotTransformOpts parses CLI flags and config to produce pipeline
+// transform options for the snapshot command.
+func buildSnapshotTransformOpts(cfg config.Config, cmd *cobra.Command) []pgcdc.Option {
+	var opts []pgcdc.Option
+
+	// CLI flag shortcuts → global transforms.
+	if cols, _ := cmd.Flags().GetStringSlice("drop-columns"); len(cols) > 0 {
+		opts = append(opts, pgcdc.WithTransform(transform.DropColumns(cols...)))
+	}
+	if ops, _ := cmd.Flags().GetStringSlice("filter-operations"); len(ops) > 0 {
+		opts = append(opts, pgcdc.WithTransform(transform.FilterOperation(ops...)))
+	}
+
+	// Config file: global transforms.
+	for _, spec := range cfg.Transforms.Global {
+		if fn := specToTransform(spec); fn != nil {
+			opts = append(opts, pgcdc.WithTransform(fn))
+		}
+	}
+
+	// Config file: per-adapter transforms.
+	for adapterName, specs := range cfg.Transforms.Adapter {
+		for _, spec := range specs {
+			if fn := specToTransform(spec); fn != nil {
+				opts = append(opts, pgcdc.WithAdapterTransform(adapterName, fn))
+			}
+		}
+	}
+
+	return opts
 }

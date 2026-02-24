@@ -40,7 +40,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 ```
 
 - **Concurrency**: `errgroup` manages all goroutines. One context cancellation tears everything down.
-- **Backpressure**: Bus uses non-blocking sends. If a subscriber channel is full, the event is dropped and a warning is logged. No adapter can block the pipeline.
+- **Backpressure**: `--bus-mode fast` (default) drops events on full subscriber channels. `--bus-mode reliable` blocks the detector instead of dropping — loss-free at the cost of throughput.
 - **Transaction metadata**: WAL detector optionally enriches events with `transaction.xid`, `transaction.commit_time`, `transaction.seq` when `--tx-metadata` is enabled. `--tx-markers` adds synthetic BEGIN/COMMIT events on channel `pgcdc:_txn` (implies `--tx-metadata`). LISTEN/NOTIFY events omit this field (protocol has no tx info).
 - **Snapshot-first**: `--snapshot-first --snapshot-table <table>` on listen (WAL only) runs a table snapshot using the replication slot's exported snapshot before transitioning to live streaming. Zero-gap delivery — snapshot sees exactly the data at the slot's consistent point, WAL streams everything after.
 - **Persistent slots + checkpointing**: `--persistent-slot` creates a named, non-temporary replication slot with LSN checkpointing to `pgcdc_checkpoints` table. Survives crash/restart. Configurable via `--slot-name`, `--checkpoint-db`.
@@ -59,7 +59,10 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **Wiring**: `pgcdc.go` provides the reusable `Pipeline` type (detector + bus + adapters). `cmd/listen.go` adds CLI-specific HTTP servers on top.
 - **Observability**: Prometheus metrics exposed at `/metrics`. Rich health check at `/healthz` returns per-component status (200 when all up, 503 when any down). Standalone metrics server via `--metrics-addr`.
 - **Embedding adapter**: `--adapter embedding` with `--embedding-api-url`, `--embedding-columns`, `--embedding-api-key`. Calls any OpenAI-compatible endpoint, UPSERTs vector into pgvector table. INSERT/UPDATE → embed+upsert, DELETE → delete vector. Zero new deps — vectors stored as strings with `::vector` cast.
-- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`, `EmbeddingDeliveryError`, `NatsPublishError`, `OutboxProcessError`, `IcebergFlushError`) for `errors.Is`/`errors.As` matching.
+- **Incremental snapshots**: `--incremental-snapshot` enables chunk-based `SELECT ... WHERE pk > ? LIMIT N` snapshots running alongside live WAL streaming. Signal-table triggered (`pgcdc_signals`), progress persisted to `pgcdc_snapshot_progress`, crash-resumable. Emits `SNAPSHOT_STARTED`, `SNAPSHOT` (row), and `SNAPSHOT_COMPLETED` events on `pgcdc:_snapshot`. `--snapshot-chunk-size`, `--snapshot-chunk-delay`, `--snapshot-progress-db`.
+- **Transform pipeline**: `--drop-columns col1,col2` and `--filter-operations INSERT,UPDATE` as CLI shortcuts. Full config via `transforms.global` and `transforms.adapter.<name>` in YAML. Built-in types: `drop_columns`, `rename_fields`, `mask` (zero/hash/redact modes), `filter` (by field value or operation). Applied per-adapter or globally; dropped events increment `pgcdc_transform_dropped_total`, errors increment `pgcdc_transform_errors_total`.
+- **Cooperative checkpointing**: `--cooperative-checkpoint` (requires `--persistent-slot` + `--detector wal`). Adapters call `AckFunc` after delivery; checkpoint only advances to `min(all adapter ack positions)`. Non-`Acknowledger` adapters are auto-acked on channel send. Metrics: `pgcdc_ack_position{adapter}`, `pgcdc_cooperative_checkpoint_lsn`.
+- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`, `EmbeddingDeliveryError`, `NatsPublishError`, `OutboxProcessError`, `IcebergFlushError`, `IncrementalSnapshotError`) for `errors.Is`/`errors.As` matching.
 
 ## Code Conventions
 
@@ -78,12 +81,13 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 ### New adapter
 
 1. Implement `adapter.Adapter` interface (`Start(ctx, <-chan event.Event) error`, `Name() string`)
-2. Create `adapter/<name>/` package
-3. Add switch case in `cmd/listen.go` adapter loop
-4. Add config struct in `internal/config/config.go`
-5. Add CLI flags in `cmd/listen.go` `init()`
-6. Add metrics instrumentation (`metrics.EventsDelivered.WithLabelValues("<name>").Inc()`)
-7. Add scenario test, register in SCENARIOS.md
+2. Optionally implement `adapter.Acknowledger` (`SetAckFunc(fn AckFunc)`) for cooperative checkpointing support — ack after fully handling each event (success, DLQ, or intentional skip)
+3. Create `adapter/<name>/` package
+4. Add switch case in `cmd/listen.go` adapter loop
+5. Add config struct in `internal/config/config.go`
+6. Add CLI flags in `cmd/listen.go` `init()`
+7. Add metrics instrumentation (`metrics.EventsDelivered.WithLabelValues("<name>").Inc()`)
+8. Add scenario test, register in SCENARIOS.md
 
 ### New detector
 
@@ -105,7 +109,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 
 - Use a connection pool for detectors — breaks LISTEN state
 - Close the events channel from a detector — bus owns lifecycle
-- Block in bus, SSE, or WS broadcast — non-blocking sends only
+- Block in SSE or WS broadcast — non-blocking sends only (bus reliable mode is explicitly opt-in via `--bus-mode reliable`)
 - Add external brokers (Redis, Kafka) — zero infra beyond PG is a design choice
 - Use `log` or `fmt.Printf` — slog only
 - Put raw SQL identifiers in Go strings — use `pgx.Identifier{}.Sanitize()`
@@ -180,7 +184,7 @@ Each scenario file follows this pattern:
 
 ### Max scenario count
 
-Target: ~8-20 scenarios for a project this size. If approaching 20, consolidate related scenarios before adding new ones.
+Target: ~20-30 scenarios for a project this size. If approaching 30, consolidate related scenarios before adding new ones.
 
 ## Code Organization
 
@@ -201,8 +205,10 @@ adapter/        Output adapter interface + implementations
   search/       Typesense / Meilisearch sync
   redis/        Redis cache invalidation / sync
   grpc/         gRPC streaming server
-bus/            Event fan-out
-snapshot/       Table snapshot (COPY-based row export)
+ack/            Cooperative checkpoint LSN tracker
+bus/            Event fan-out (fast or reliable mode)
+transform/      Event transform pipeline (drop, rename, mask, filter)
+snapshot/       Table snapshot (COPY-based row export + incremental chunk-based)
 detector/       Change detection interface + implementations
   listennotify/ PostgreSQL LISTEN/NOTIFY
   walreplication/ PostgreSQL WAL logical replication
@@ -228,12 +234,14 @@ testutil/       Test utilities
 - `snapshot/snapshot.go` — Table snapshot using REPEATABLE READ + SELECT *
 - `adapter/adapter.go` — Adapter interface
 - `detector/detector.go` — Detector interface
-- `bus/bus.go` — Fan-out with non-blocking sends
+- `bus/bus.go` — Fan-out with configurable fast (drop) or reliable (block) mode
+- `ack/tracker.go` — Cooperative checkpoint LSN tracker (min across all adapters)
+- `transform/transform.go` — TransformFunc interface, Chain, ErrDropEvent; `drop_columns.go`, `rename_fields.go`, `mask.go`, `filter.go` for built-in transforms
 - `internal/config/config.go` — All config structs + defaults (CLI-only)
-- `event/event.go` — Event model (UUIDv7, JSON payload)
+- `event/event.go` — Event model (UUIDv7, JSON payload, LSN for WAL events)
 - `health/health.go` — Component health checker
 - `metrics/metrics.go` — Prometheus metric definitions
-- `pgcdcerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError, EmbeddingDeliveryError)
+- `pgcdcerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError, EmbeddingDeliveryError, NatsPublishError, OutboxProcessError, IcebergFlushError, IncrementalSnapshotError)
 - `adapter/embedding/embedding.go` — Embedding adapter: OpenAI-compatible API + pgvector UPSERT/DELETE
 - `adapter/nats/nats.go` — NATS JetStream adapter: publish with dedup + auto-stream creation
 - `adapter/search/search.go` — Search adapter: Typesense/Meilisearch sync with batching

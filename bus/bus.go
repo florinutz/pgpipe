@@ -12,6 +12,14 @@ import (
 
 const defaultBufferSize = 1024
 
+// BusMode controls how the bus handles full subscriber channels.
+type BusMode int
+
+const (
+	BusModeFast     BusMode = iota // default: non-blocking sends, drops on full
+	BusModeReliable                // blocking sends, no drops (back-pressures the detector)
+)
+
 // FilterFunc returns true if the event should be delivered to the subscriber.
 type FilterFunc func(event.Event) bool
 
@@ -24,11 +32,13 @@ type subscriber struct {
 
 // Bus receives events on an ingest channel and fans them out to all subscriber
 // channels. Subscribers that fall behind (full channel) are skipped with a
-// warning log rather than blocking the pipeline.
+// warning log rather than blocking the pipeline (fast mode), or block the
+// detector until space is available (reliable mode).
 type Bus struct {
 	ingest      chan event.Event
 	subscribers []subscriber
 	bufferSize  int
+	mode        BusMode
 	closed      bool
 	mu          sync.RWMutex
 	logger      *slog.Logger
@@ -48,6 +58,11 @@ func New(bufferSize int, logger *slog.Logger) *Bus {
 		bufferSize: bufferSize,
 		logger:     logger,
 	}
+}
+
+// SetMode sets the fan-out mode. Must be called before Start.
+func (b *Bus) SetMode(mode BusMode) {
+	b.mode = mode
 }
 
 // Ingest returns the send-only ingest channel. Detectors push events here.
@@ -85,33 +100,62 @@ func (b *Bus) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			b.mu.Lock()
-			b.closed = true
-			for _, sub := range b.subscribers {
-				close(sub.ch)
-			}
-			b.subscribers = nil
-			metrics.BusSubscribers.Set(0)
-			b.mu.Unlock()
+			b.closeSubscribers()
 			return ctx.Err()
 		case ev := <-b.ingest:
 			metrics.EventsReceived.Inc()
 			b.mu.RLock()
-			for _, sub := range b.subscribers {
-				if sub.filter != nil && !sub.filter(ev) {
-					continue
+			if b.mode == BusModeReliable {
+				for _, sub := range b.subscribers {
+					if sub.filter != nil && !sub.filter(ev) {
+						continue
+					}
+					select {
+					case sub.ch <- ev:
+					default:
+						// Channel full: increment backpressure metric, then block.
+						metrics.BusBackpressure.WithLabelValues(sub.name).Inc()
+						select {
+						case sub.ch <- ev:
+						case <-ctx.Done():
+							b.mu.RUnlock()
+							b.closeSubscribers()
+							return ctx.Err()
+						}
+					}
 				}
-				select {
-				case sub.ch <- ev:
-				default:
-					metrics.EventsDropped.WithLabelValues(sub.name).Inc()
-					b.logger.Warn("subscriber channel full, dropping event",
-						slog.String("event_id", ev.ID),
-						slog.String("adapter", sub.name),
-					)
+			} else {
+				for _, sub := range b.subscribers {
+					if sub.filter != nil && !sub.filter(ev) {
+						continue
+					}
+					select {
+					case sub.ch <- ev:
+					default:
+						metrics.EventsDropped.WithLabelValues(sub.name).Inc()
+						b.logger.Warn("subscriber channel full, dropping event",
+							slog.String("event_id", ev.ID),
+							slog.String("adapter", sub.name),
+						)
+					}
 				}
 			}
 			b.mu.RUnlock()
 		}
 	}
+}
+
+// closeSubscribers closes all subscriber channels and marks the bus as closed.
+func (b *Bus) closeSubscribers() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
+	b.closed = true
+	for _, sub := range b.subscribers {
+		close(sub.ch)
+	}
+	b.subscribers = nil
+	metrics.BusSubscribers.Set(0)
 }
