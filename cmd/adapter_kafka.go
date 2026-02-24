@@ -7,10 +7,11 @@ import (
 
 	"github.com/florinutz/pgcdc/adapter"
 	kafkaadapter "github.com/florinutz/pgcdc/adapter/kafka"
+	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/internal/config"
 )
 
-func makeKafkaAdapter(cfg config.Config, logger *slog.Logger) (adapter.Adapter, error) {
+func makeKafkaAdapter(cfg config.Config, enc encoding.Encoder, logger *slog.Logger) (adapter.Adapter, error) {
 	return kafkaadapter.New(
 		cfg.Kafka.Brokers,
 		cfg.Kafka.Topic,
@@ -21,6 +22,7 @@ func makeKafkaAdapter(cfg config.Config, logger *slog.Logger) (adapter.Adapter, 
 		cfg.Kafka.TLS,
 		cfg.Kafka.BackoffBase,
 		cfg.Kafka.BackoffCap,
+		enc,
 		logger,
 	), nil
 }

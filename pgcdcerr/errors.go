@@ -134,6 +134,23 @@ func (e *IcebergFlushError) Unwrap() error {
 	return e.Err
 }
 
+// SchemaRegistryError indicates a Schema Registry operation failed.
+type SchemaRegistryError struct {
+	Subject    string
+	Operation  string
+	StatusCode int
+	Err        error
+}
+
+func (e *SchemaRegistryError) Error() string {
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("schema registry %s for subject %q failed (HTTP %d): %v", e.Operation, e.Subject, e.StatusCode, e.Err)
+	}
+	return fmt.Sprintf("schema registry %s for subject %q failed: %v", e.Operation, e.Subject, e.Err)
+}
+
+func (e *SchemaRegistryError) Unwrap() error { return e.Err }
+
 // PluginError indicates that a Wasm plugin call failed.
 type PluginError struct {
 	Plugin string

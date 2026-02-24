@@ -417,6 +417,10 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				coopLSN := pglogrepl.LSN(d.cooperativeLSNFn())
 				if coopLSN > 0 && coopLSN <= clientXLogPos {
 					reportLSN = coopLSN
+				} else {
+					// No adapter has acked yet — don't advance the checkpoint
+					// or standby position until at least one ack arrives.
+					reportLSN = 0
 				}
 			}
 

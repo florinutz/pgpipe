@@ -96,7 +96,10 @@ func New(warn, critical int64, maxThrottle time.Duration, pollInterval time.Dura
 }
 
 // SetLagFunc injects the function that returns current WAL lag in bytes.
+// Safe to call concurrently with Run/evaluate.
 func (c *Controller) SetLagFunc(fn func() int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.lagFn = fn
 }
 
@@ -153,7 +156,10 @@ func (c *Controller) IsShed(adapterName string) bool {
 // Run starts the backpressure control loop. It polls lagFn and updates zone,
 // throttle, pause, and shed state. Blocks until ctx is cancelled.
 func (c *Controller) Run(ctx context.Context) error {
-	if c.lagFn == nil {
+	c.mu.Lock()
+	fn := c.lagFn
+	c.mu.Unlock()
+	if fn == nil {
 		return nil
 	}
 
@@ -172,7 +178,10 @@ func (c *Controller) Run(ctx context.Context) error {
 
 // evaluate reads current lag and updates all controller state.
 func (c *Controller) evaluate() {
-	lag := c.lagFn()
+	c.mu.Lock()
+	fn := c.lagFn
+	c.mu.Unlock()
+	lag := fn()
 	if lag < 0 {
 		lag = 0
 	}

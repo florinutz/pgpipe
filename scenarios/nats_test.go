@@ -55,7 +55,7 @@ func TestScenario_Nats(t *testing.T) {
 
 		// Create the NATS adapter.
 		logger := testLogger()
-		a := natsadapter.New(natsURL, "pgcdc", "pgcdc", "", 0, 0, 0, logger)
+		a := natsadapter.New(natsURL, "pgcdc", "pgcdc", "", 0, 0, 0, nil, logger)
 
 		// Wire pipeline manually: detector -> bus -> NATS adapter.
 		pipelineCtx, pipelineCancel := context.WithCancel(context.Background())

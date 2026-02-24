@@ -74,11 +74,14 @@ func TestScenario_KafkaAdapter(t *testing.T) {
 		brokers := startKafka(t)
 
 		logger := testLogger()
-		a := kafkaadapter.New(brokers, "", "", "", "", "", false, 0, 0, logger)
+		a := kafkaadapter.New(brokers, "", "", "", "", "", false, 0, 0, nil, logger)
+
+		// Pre-create the topic to avoid "Unknown Topic Or Partition" race.
+		channel := "kafka_test"
+		ensureKafkaTopic(t, brokers, channel)
 
 		// Wire pipeline: LISTEN/NOTIFY detector → bus → Kafka adapter.
 		pipelineCtx, pipelineCancel := context.WithCancel(context.Background())
-		channel := "kafka_test"
 		det := listennotify.New(connStr, []string{channel}, 0, 0, logger)
 		b := bus.New(64, logger)
 
@@ -124,28 +127,23 @@ func TestScenario_KafkaAdapter(t *testing.T) {
 			t.Fatalf("read kafka message: %v", err)
 		}
 
-		// Verify the message is a valid event.Event payload.
-		var ev event.Event
-		if err := json.Unmarshal(msg.Value, &ev); err != nil {
-			t.Fatalf("unmarshal event: %v\nraw: %s", err, string(msg.Value))
+		// The adapter sends ev.Payload as the message value (raw inner JSON),
+		// with metadata in headers and message key.
+		var raw map[string]any
+		if err := json.Unmarshal(msg.Value, &raw); err != nil {
+			t.Fatalf("unmarshal payload: %v\nraw: %s", err, string(msg.Value))
+		}
+		if raw["op"] != "INSERT" {
+			t.Errorf("payload op = %v, want INSERT", raw["op"])
+		}
+		if raw["table"] != "orders" {
+			t.Errorf("payload table = %v, want orders", raw["table"])
 		}
 
-		if ev.Channel != channel {
-			t.Errorf("channel = %q, want %q", ev.Channel, channel)
-		}
-		if ev.Operation != "INSERT" {
-			t.Errorf("operation = %q, want %q", ev.Operation, "INSERT")
-		}
-		if ev.Source != "listen_notify" {
-			t.Errorf("source = %q, want %q", ev.Source, "listen_notify")
-		}
-		if ev.ID == "" {
-			t.Error("event ID is empty")
-		}
-
-		// Verify the message key is the event ID.
-		if string(msg.Key) != ev.ID {
-			t.Errorf("message key = %q, want event ID %q", string(msg.Key), ev.ID)
+		// Verify the message key is a non-empty event ID.
+		eventID := string(msg.Key)
+		if eventID == "" {
+			t.Error("message key (event ID) is empty")
 		}
 
 		// Verify headers.
@@ -159,12 +157,15 @@ func TestScenario_KafkaAdapter(t *testing.T) {
 		if headers["pgcdc-operation"] != "INSERT" {
 			t.Errorf("pgcdc-operation header = %q, want INSERT", headers["pgcdc-operation"])
 		}
-		if headers["pgcdc-event-id"] != ev.ID {
-			t.Errorf("pgcdc-event-id header = %q, want event ID %q", headers["pgcdc-event-id"], ev.ID)
+		if headers["pgcdc-event-id"] != eventID {
+			t.Errorf("pgcdc-event-id header = %q, want event ID %q", headers["pgcdc-event-id"], eventID)
+		}
+		if headers["content-type"] != "application/json" {
+			t.Errorf("content-type header = %q, want application/json", headers["content-type"])
 		}
 
 		fmt.Fprintf(os.Stderr, "Kafka message received: topic=%s key=%s event_id=%s\n",
-			msg.Topic, string(msg.Key), ev.ID)
+			msg.Topic, eventID, eventID)
 	})
 
 	t.Run("terminal error goes to DLQ", func(t *testing.T) {
@@ -194,7 +195,7 @@ func TestScenario_KafkaAdapter(t *testing.T) {
 
 		capDLQ := &captureDLQ{}
 		logger := testLogger()
-		a := kafkaadapter.New(brokers, tinyTopic, "", "", "", "", false, 0, 0, logger)
+		a := kafkaadapter.New(brokers, tinyTopic, "", "", "", "", false, 0, 0, nil, logger)
 		a.SetDLQ(capDLQ)
 
 		// Wire a minimal pipeline.

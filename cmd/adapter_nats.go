@@ -7,10 +7,11 @@ import (
 
 	"github.com/florinutz/pgcdc/adapter"
 	natsadapter "github.com/florinutz/pgcdc/adapter/nats"
+	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/internal/config"
 )
 
-func makeNATSAdapter(cfg config.Config, logger *slog.Logger) (adapter.Adapter, error) {
+func makeNATSAdapter(cfg config.Config, enc encoding.Encoder, logger *slog.Logger) (adapter.Adapter, error) {
 	return natsadapter.New(
 		cfg.Nats.URL,
 		cfg.Nats.Subject,
@@ -19,6 +20,7 @@ func makeNATSAdapter(cfg config.Config, logger *slog.Logger) (adapter.Adapter, e
 		cfg.Nats.MaxAge,
 		cfg.Nats.BackoffBase,
 		cfg.Nats.BackoffCap,
+		enc,
 		logger,
 	), nil
 }

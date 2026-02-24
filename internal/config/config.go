@@ -32,6 +32,7 @@ type Config struct {
 	Transforms          TransformConfig           `mapstructure:"transforms"`
 	Backpressure        BackpressureConfig        `mapstructure:"backpressure"`
 	Plugins             PluginConfig              `mapstructure:"plugins"`
+	Encoding            EncodingConfig            `mapstructure:"encoding"`
 }
 
 type BusConfig struct {
@@ -141,6 +142,7 @@ type NatsConfig struct {
 	MaxAge      time.Duration `mapstructure:"max_age"`
 	BackoffBase time.Duration `mapstructure:"backoff_base"`
 	BackoffCap  time.Duration `mapstructure:"backoff_cap"`
+	Encoding    string        `mapstructure:"encoding"` // json, avro, protobuf
 }
 
 type OutboxConfig struct {
@@ -193,6 +195,7 @@ type KafkaConfig struct {
 	TLSCAFile     string        `mapstructure:"tls_ca_file"`
 	BackoffBase   time.Duration `mapstructure:"backoff_base"`
 	BackoffCap    time.Duration `mapstructure:"backoff_cap"`
+	Encoding      string        `mapstructure:"encoding"` // json, avro, protobuf
 }
 
 type IncrementalSnapshotConfig struct {
@@ -267,6 +270,12 @@ type PluginAdapterSpec struct {
 type PluginSpec struct {
 	Path   string         `mapstructure:"path"`
 	Config map[string]any `mapstructure:"config"`
+}
+
+type EncodingConfig struct {
+	SchemaRegistryURL      string `mapstructure:"schema_registry_url"`
+	SchemaRegistryUsername string `mapstructure:"schema_registry_username"`
+	SchemaRegistryPassword string `mapstructure:"schema_registry_password"`
 }
 
 func Default() Config {

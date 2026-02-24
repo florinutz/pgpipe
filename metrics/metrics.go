@@ -329,6 +329,28 @@ var (
 		Help: "Total Wasm plugin errors.",
 	}, []string{"plugin", "type"})
 
+	// Encoding metrics.
+
+	EncodingEncoded = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_encoding_encoded_total",
+		Help: "Total number of events encoded (Avro/Protobuf).",
+	})
+
+	EncodingErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_encoding_errors_total",
+		Help: "Total number of encoding errors.",
+	})
+
+	SchemaRegistryRegistrations = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_schema_registry_registrations_total",
+		Help: "Total number of schema registrations with Schema Registry.",
+	})
+
+	SchemaRegistryErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_schema_registry_errors_total",
+		Help: "Total number of Schema Registry errors.",
+	})
+
 	// Backpressure metrics.
 
 	BackpressureState = promauto.NewGauge(prometheus.GaugeOpts{
