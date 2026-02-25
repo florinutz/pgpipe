@@ -1,13 +1,13 @@
 # pgcdc
 
-**Stream PostgreSQL changes anywhere. Single binary. No Kafka.**
+**Stream database changes anywhere. Single binary. No Kafka.**
 
 [![CI](https://github.com/florinutz/pgcdc/actions/workflows/ci.yml/badge.svg)](https://github.com/florinutz/pgcdc/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/florinutz/pgcdc)](https://goreportcard.com/report/github.com/florinutz/pgcdc)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/florinutz/pgcdc.svg)](https://pkg.go.dev/github.com/florinutz/pgcdc)
 
-14 adapters | 3 detectors | WAL + LISTEN/NOTIFY + Outbox | Persistent slots | Dead letter queue | Event routing | Zero infrastructure
+15 adapters | 5 detectors | PostgreSQL + MySQL + MongoDB | Persistent slots | Dead letter queue | Event routing | Zero infrastructure
 
 ```bash
 go install github.com/florinutz/pgcdc/cmd/pgcdc@latest
@@ -15,11 +15,12 @@ go install github.com/florinutz/pgcdc/cmd/pgcdc@latest
 
 ```
 PostgreSQL ──▶ pgcdc (single Go binary) ──▶ Webhook, SSE, WebSocket, gRPC
-               3 detectors:                  stdout, file, exec, PG table
-               • LISTEN/NOTIFY               NATS JetStream
-               • WAL logical replication      Typesense / Meilisearch
-               • Outbox table polling         Redis cache invalidation
-                                              pgvector embeddings
+MySQL      ──▶  5 detectors:                stdout, file, exec, PG table
+MongoDB    ──▶  • LISTEN/NOTIFY             NATS JetStream, Kafka, S3
+                • WAL logical replication    Typesense / Meilisearch
+                • Outbox table polling       Redis cache invalidation
+                • MySQL binlog               pgvector embeddings
+                • MongoDB Change Streams
 ```
 
 ## Why pgcdc?
@@ -28,7 +29,7 @@ PostgreSQL ──▶ pgcdc (single Go binary) ──▶ Webhook, SSE, WebSocket,
 |--|-------|----------|--------|---------|
 | Single binary | Yes | No (JVM+Kafka) | No (managed) | Yes |
 | Memory (idle) | ~12 MB | ~500 MB+ | N/A | ~50 MB |
-| PG-optimized | Yes | Generic | Yes | Generic |
+| PG/MySQL/MongoDB | Yes | Generic | Yes | Generic |
 | Built-in pgvector sync | Yes | No | No | No |
 | SSE/WS/gRPC streaming | Yes | No | HTTP only | No |
 | Search sync (Typesense/Meili) | Yes | No | No | Plugin |
@@ -82,6 +83,28 @@ pgcdc init --table my_outbox --adapter outbox | psql mydb
 pgcdc listen --detector outbox --outbox-table my_outbox --db postgres://...
 ```
 
+### Path 4: MySQL Binlog (MySQL CDC)
+
+Requires MySQL 8.0+ with `binlog_format=ROW`.
+
+```bash
+pgcdc listen --detector mysql \
+  --mysql-addr localhost:3306 --mysql-user root --mysql-password secret \
+  --mysql-server-id 100 --mysql-tables mydb.orders \
+  -a stdout
+```
+
+### Path 5: MongoDB Change Streams (MongoDB CDC)
+
+Requires MongoDB replica set or sharded cluster.
+
+```bash
+pgcdc listen --detector mongodb \
+  --mongodb-uri mongodb://localhost:27017 \
+  --mongodb-database mydb --mongodb-collections orders \
+  -a stdout
+```
+
 ## Adapters
 
 | Adapter | Flag | Description |
@@ -95,9 +118,11 @@ pgcdc listen --detector outbox --outbox-table my_outbox --db postgres://...
 | **exec** | `-a exec --exec-command <cmd>` | Pipe JSON to subprocess stdin. Auto-restarts. |
 | **pg_table** | `-a pg_table` | INSERT into a PostgreSQL table. |
 | **NATS** | `-a nats --nats-url <url>` | Publish to NATS JetStream with dedup. |
+| **kafka** | `-a kafka --kafka-brokers <addrs>` | Publish to Kafka. `--kafka-transactional-id` for exactly-once. |
 | **search** | `-a search --search-url <url>` | Sync to Typesense or Meilisearch. Batched. |
 | **redis** | `-a redis --redis-url <url>` | Cache invalidation or sync. DEL/SET per event. |
 | **embedding** | `-a embedding --embedding-api-url <url>` | OpenAI-compatible API → pgvector UPSERT. |
+| **s3** | `-a s3 --s3-bucket <name>` | Flush to S3-compatible storage (JSON Lines/Parquet). |
 | **iceberg** | `-a iceberg --iceberg-warehouse <path>` | Apache Iceberg table writes. |
 
 Use multiple adapters: `-a stdout -a webhook -a redis`
@@ -130,6 +155,24 @@ pgcdc listen ... --dlq pg_table --dlq-table pgcdc_dead_letters
 
 # Disable
 pgcdc listen ... --dlq none
+```
+
+### DLQ Management
+
+List, replay, and purge failed events stored in the PG table DLQ:
+
+```bash
+# List failed events (table or JSON output)
+pgcdc dlq list --dlq-db postgres://... --format table
+pgcdc dlq list --adapter webhook --since 2026-02-01T00:00:00Z --format json
+
+# Replay failed events through an adapter
+pgcdc dlq replay --dlq-db postgres://... --adapter webhook --webhook-url https://...
+pgcdc dlq replay --dry-run  # preview without delivering
+
+# Purge old or replayed records
+pgcdc dlq purge --dlq-db postgres://... --replayed        # only already-replayed
+pgcdc dlq purge --until 2026-01-01T00:00:00Z --force      # by date
 ```
 
 ## Transforms
@@ -169,7 +212,22 @@ transforms:
         columns: [internal_id, created_by]
 ```
 
-Built-in transform types: `drop_columns`, `rename_fields`, `mask` (hash/redact/partial), `filter` (by operation or field value), `debezium`.
+Built-in transform types: `drop_columns`, `rename_fields`, `mask` (hash/redact/partial), `filter` (by operation or field value), `debezium`, `cloudevents`.
+
+### CloudEvents Envelope
+
+Rewrite events into [CloudEvents v1.0](https://cloudevents.io/) structured-mode JSON:
+
+```yaml
+transforms:
+  global:
+    - type: cloudevents
+      cloudevents:
+        source: "https://mycompany.com/orders"
+        type_prefix: "com.company.order"
+```
+
+Produces spec-compliant envelopes with pgcdc extension attributes (`pgcdclsn`, `pgcdctxid`).
 
 ## Snapshot: Initial Data Sync
 
@@ -184,6 +242,21 @@ pgcdc listen --detector wal --publication pgcdc_orders \
   --snapshot-first --snapshot-table orders --db postgres://...
 ```
 
+### Incremental Snapshots
+
+Run chunk-based snapshots alongside live WAL streaming, triggered via signal table:
+
+```bash
+pgcdc listen --detector wal --all-tables --persistent-slot \
+  --incremental-snapshot --snapshot-chunk-size 1000 --snapshot-chunk-delay 100ms \
+  --db postgres://...
+
+# Trigger a snapshot from SQL:
+INSERT INTO pgcdc_signals (signal_type, signal_payload) VALUES ('snapshot', '{"table":"orders"}');
+```
+
+Progress is persisted to `pgcdc_snapshot_progress` — crash-resumable.
+
 ## Persistent Slots + Checkpointing
 
 Survive crashes and restarts with WAL position tracking:
@@ -196,6 +269,19 @@ pgcdc listen --detector wal --publication pgcdc_orders \
 
 Checkpoints are stored in `pgcdc_checkpoints` table. The replication slot persists across disconnects.
 
+## Backpressure
+
+Source-aware WAL lag monitoring with automatic throttle/pause/shed to prevent PG disk exhaustion:
+
+```bash
+pgcdc listen --detector wal --all-tables --persistent-slot \
+  --backpressure --bp-warn-threshold 500MB --bp-critical-threshold 2GB \
+  --adapter-priority webhook=critical --adapter-priority search=best-effort \
+  --db postgres://...
+```
+
+Three zones: green (full speed), yellow (proportional throttle + shed best-effort adapters), red (pause detector + shed normal+best-effort). Hysteresis prevents flapping.
+
 ## Transaction Metadata
 
 ```bash
@@ -206,6 +292,24 @@ pgcdc listen --detector wal --publication pgcdc_orders --tx-metadata --db postgr
 pgcdc listen --detector wal --publication pgcdc_orders --tx-markers --db postgres://...
 ```
 
+## Encoding + Schema Registry
+
+Kafka and NATS adapters support Avro, Protobuf, or JSON encoding with optional Confluent Schema Registry integration:
+
+```bash
+# Kafka with Avro encoding
+pgcdc listen --all-tables -a kafka --kafka-brokers localhost:9092 \
+  --kafka-encoding avro --schema-registry-url http://localhost:8081 \
+  --db postgres://...
+
+# NATS with Protobuf encoding
+pgcdc listen --all-tables -a nats --nats-url nats://localhost:4222 \
+  --nats-encoding protobuf --schema-registry-url http://localhost:8081 \
+  --db postgres://...
+```
+
+Schema Registry auth: `--schema-registry-username`, `--schema-registry-password`.
+
 ## Observability
 
 - **Prometheus metrics** at `/metrics` (30+ metrics)
@@ -213,10 +317,13 @@ pgcdc listen --detector wal --publication pgcdc_orders --tx-markers --db postgre
 - **Standalone metrics server**: `--metrics-addr :9090`
 - **Slot lag monitoring**: `pgcdc_slot_lag_bytes` gauge + log warnings
 - **Heartbeat**: `--heartbeat-interval 30s` keeps replication slots advancing
+- **OpenTelemetry tracing**: `--otel-exporter otlp --otel-endpoint localhost:4317` for distributed tracing (OTLP gRPC or stdout exporter, configurable sample ratio via `--otel-sample-ratio`)
 
 ## Configuration
 
-Three layers (highest priority wins): **CLI flags** > **env vars** (`PGCDC_` prefix) > **YAML config file** > **defaults**
+Three layers (highest priority wins): **CLI flags** > **env vars** (`PGCDC_` prefix) > **YAML config file** > **defaults**.
+
+**Hot-reload**: `kill -HUP <pid>` re-reads the YAML config and atomically swaps `transforms:` and `routes:` for all running adapters with zero event loss. Adapters, detectors, and bus mode remain immutable.
 
 ```yaml
 # pgcdc.yaml
@@ -244,6 +351,24 @@ redis:
   key_prefix: "orders:"
 ```
 
+## Wasm Plugins
+
+Extend pgcdc with WebAssembly plugins (Extism-based, pure Go, no CGo). Four extension points:
+
+```bash
+# Custom transform plugin
+pgcdc listen --all-tables --plugin-transform ./my-transform.wasm --db postgres://...
+
+# Custom adapter plugin
+pgcdc listen --all-tables --plugin-adapter ./my-sink.wasm --db postgres://...
+
+# Custom DLQ or checkpoint backend
+pgcdc listen ... --dlq plugin --dlq-plugin-path ./my-dlq.wasm
+pgcdc listen ... --checkpoint-plugin ./my-store.wasm
+```
+
+Write plugins in any Extism PDK language (Rust, Go, TypeScript, Python). Host functions available: `pgcdc_log`, `pgcdc_metric_inc`, `pgcdc_http_request`.
+
 ## Architecture
 
 ```
@@ -255,13 +380,16 @@ Context ──▶ Pipeline (pgcdc.go)
   Detector ──▶ Bus (fan-out + routing) ──▶ Adapter ──▶ DLQ (on failure)
   (listen_notify    subscriber chans
    wal              (one per adapter,
-   outbox)           filtered by route)
+   outbox            filtered by route)
+   mysql
+   mongodb)
 ```
 
 - **Concurrency**: `errgroup` manages all goroutines. One context cancellation tears everything down.
-- **Backpressure**: Non-blocking sends. Full subscriber channel = dropped event + warning log.
+- **Backpressure**: `--bus-mode fast` (default) drops on full channel. `--bus-mode reliable` blocks detector instead.
 - **Routing**: Bus-level filtering before fan-out. No event copies wasted.
 - **DLQ**: Failed events captured to stderr or PG table for inspection/replay.
+- **Operations**: INSERT, UPDATE, DELETE, TRUNCATE (WAL detector).
 
 ## Development
 
