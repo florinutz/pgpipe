@@ -1,6 +1,6 @@
 # pgcdc
 
-PostgreSQL change data capture (LISTEN/NOTIFY, WAL logical replication, or outbox pattern) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, and gRPC.
+PostgreSQL change data capture (LISTEN/NOTIFY, WAL logical replication, or outbox pattern) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, gRPC, and S3-compatible object storage.
 
 ## Quick Start
 
@@ -33,6 +33,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
                                         ──> Adapter (search: Typesense/Meilisearch)
                                         ──> Adapter (redis: invalidate/sync)
                                         ──> Adapter (gRPC streaming)
+                                        ──> Adapter (S3: JSON Lines/Parquet)
                                         ──> Adapter (embedding)  ──> DLQ
                                 subscriber chans (one per adapter, filtered by route)
                                       |
@@ -55,6 +56,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **Search adapter**: `--adapter search` syncs to Typesense or Meilisearch. Batched upserts, individual deletes. `--search-engine`, `--search-url`, `--search-api-key`, `--search-index`.
 - **Redis adapter**: `--adapter redis` for cache invalidation (`DEL` on any change) or sync (`SET`/`DEL`). `--redis-url`, `--redis-mode invalidate|sync`, `--redis-key-prefix`.
 - **gRPC adapter**: `--adapter grpc` starts a gRPC streaming server. Clients call `Subscribe(SubscribeRequest)` with optional channel filter. Proto at `adapter/grpc/proto/pgcdc.proto`.
+- **S3 adapter**: `--adapter s3` buffers events and periodically flushes partitioned objects (Hive-style `channel=.../year=.../month=.../day=.../`) to any S3-compatible store (AWS S3, MinIO, R2, etc.). JSON Lines (default) or Parquet format. Time+size flush triggers, atomic buffer swap, all-or-nothing upload per flush. `--s3-bucket`, `--s3-prefix`, `--s3-endpoint`, `--s3-region`, `--s3-access-key-id`, `--s3-secret-access-key`, `--s3-format`, `--s3-flush-interval`, `--s3-flush-size`, `--s3-drain-timeout`.
 - **Dead letter queue**: `--dlq stderr|pg_table|none`. Failed events captured to stderr (JSON lines) or `pgcdc_dead_letters` table. Adapters with DLQ support: webhook, embedding, kafka.
 - **Kafka adapter**: `--adapter kafka` publishes events to Kafka topics with per-event key (`event.ID`), headers (`pgcdc-channel`, `pgcdc-operation`, `pgcdc-event-id`), and `RequireAll` acks. Channel-to-topic mapping: `pgcdc:orders` → `pgcdc.orders`. `--kafka-topic` overrides with a fixed topic. SASL (plain, SCRAM-SHA-256/512) and TLS supported. Terminal Kafka errors (non-retriable) go to DLQ; connection errors trigger reconnect with backoff. `--kafka-transactional-id` enables exactly-once delivery via Kafka transactions (each event produced in its own transaction).
 - **Event routing**: `--route adapter=channel1,channel2`. Bus-level filtering before fan-out. Adapters without routes receive all events.
@@ -68,7 +70,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **Transform pipeline**: `--drop-columns col1,col2` and `--filter-operations INSERT,UPDATE` as CLI shortcuts. Full config via `transforms.global` and `transforms.adapter.<name>` in YAML. Built-in types: `drop_columns`, `rename_fields`, `mask` (zero/hash/redact modes), `filter` (by field value or operation), `debezium` (rewrites payload into Debezium envelope with before/after/op/source/transaction blocks — `--debezium-envelope`, `--debezium-connector-name`, `--debezium-database`). Applied per-adapter or globally; dropped events increment `pgcdc_transform_dropped_total`, errors increment `pgcdc_transform_errors_total`.
 - **Cooperative checkpointing**: `--cooperative-checkpoint` (requires `--persistent-slot` + `--detector wal`). Adapters call `AckFunc` after delivery; checkpoint only advances to `min(all adapter ack positions)`. Non-`Acknowledger` adapters are auto-acked on channel send. Metrics: `pgcdc_ack_position{adapter}`, `pgcdc_cooperative_checkpoint_lsn`.
 - **Wasm plugin system**: Extism-based (pure Go, no CGo) plugin system for 4 extension points: transforms, adapters, DLQ backends, checkpoint stores. Plugins compiled to `.wasm` from any Extism PDK language (Rust, Go, Python, TypeScript). Zero overhead when no plugins configured. JSON serialization (protobuf opt-in). Host functions: `pgcdc_log`, `pgcdc_metric_inc`, `pgcdc_http_request`. Config via `plugins:` YAML block or `--plugin-transform`, `--plugin-adapter`, `--dlq plugin`, `--checkpoint-plugin` CLI flags. Metrics: `pgcdc_plugin_calls_total`, `pgcdc_plugin_duration_seconds`, `pgcdc_plugin_errors_total`.
-- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`, `EmbeddingDeliveryError`, `NatsPublishError`, `OutboxProcessError`, `IcebergFlushError`, `IncrementalSnapshotError`, `PluginError`) for `errors.Is`/`errors.As` matching.
+- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`, `EmbeddingDeliveryError`, `NatsPublishError`, `OutboxProcessError`, `IcebergFlushError`, `S3UploadError`, `IncrementalSnapshotError`, `PluginError`) for `errors.Is`/`errors.As` matching.
 
 ## Code Conventions
 
@@ -123,7 +125,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 
 ## Dependencies
 
-Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `twmb/franz-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `extism/go-sdk` (Wasm plugin runtime), `testcontainers-go` (test only).
+Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `twmb/franz-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `extism/go-sdk` (Wasm plugin runtime), `testcontainers-go` (test only).
 
 ## Testing
 
@@ -211,6 +213,7 @@ adapter/        Output adapter interface + implementations
   search/       Typesense / Meilisearch sync
   redis/        Redis cache invalidation / sync
   grpc/         gRPC streaming server
+  s3/           S3-compatible object storage (JSON Lines/Parquet)
 ack/            Cooperative checkpoint LSN tracker
 backpressure/   Source-aware WAL lag backpressure (throttle/pause/shed)
 bus/            Event fan-out (fast or reliable mode)
@@ -260,6 +263,8 @@ testutil/       Test utilities
 - `adapter/search/search.go` — Search adapter: Typesense/Meilisearch sync with batching
 - `adapter/redis/redis.go` — Redis adapter: cache invalidation (DEL) or sync (SET/DEL)
 - `adapter/grpc/grpc.go` — gRPC streaming adapter: broker pattern like SSE/WS
+- `adapter/s3/s3.go` — S3 adapter: buffered flush to S3-compatible stores, Hive-partitioned keys
+- `adapter/s3/writer.go` — S3 format writers: JSON Lines + Parquet (Snappy)
 - `dlq/dlq.go` — DLQ interface + StderrDLQ + PGTableDLQ + NopDLQ
 - `detector/outbox/outbox.go` — Outbox detector: poll-based with FOR UPDATE SKIP LOCKED
 - `detector/walreplication/oidmap.go` — Static OID → type name mapping for 40+ PG types

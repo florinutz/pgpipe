@@ -148,6 +148,29 @@ func init() {
 	mustBindPFlag("iceberg.flush_interval", f.Lookup("iceberg-flush-interval"))
 	mustBindPFlag("iceberg.flush_size", f.Lookup("iceberg-flush-size"))
 
+	// S3 adapter flags.
+	f.String("s3-bucket", "", "S3 bucket name")
+	f.String("s3-prefix", "", "S3 object key prefix")
+	f.String("s3-endpoint", "", "S3-compatible endpoint URL (e.g. MinIO, R2)")
+	f.String("s3-region", "us-east-1", "S3 region")
+	f.String("s3-access-key-id", "", "S3 access key ID (default: AWS default chain)")
+	f.String("s3-secret-access-key", "", "S3 secret access key (default: AWS default chain)")
+	f.String("s3-format", "jsonl", "S3 output format: jsonl or parquet")
+	f.Duration("s3-flush-interval", 0, "S3 flush interval (default 1m)")
+	f.Int("s3-flush-size", 0, "S3 flush size in events (default 10000)")
+	f.Duration("s3-drain-timeout", 0, "S3 shutdown drain timeout (default 30s)")
+
+	mustBindPFlag("s3.bucket", f.Lookup("s3-bucket"))
+	mustBindPFlag("s3.prefix", f.Lookup("s3-prefix"))
+	mustBindPFlag("s3.endpoint", f.Lookup("s3-endpoint"))
+	mustBindPFlag("s3.region", f.Lookup("s3-region"))
+	mustBindPFlag("s3.access_key_id", f.Lookup("s3-access-key-id"))
+	mustBindPFlag("s3.secret_access_key", f.Lookup("s3-secret-access-key"))
+	mustBindPFlag("s3.format", f.Lookup("s3-format"))
+	mustBindPFlag("s3.flush_interval", f.Lookup("s3-flush-interval"))
+	mustBindPFlag("s3.flush_size", f.Lookup("s3-flush-size"))
+	mustBindPFlag("s3.drain_timeout", f.Lookup("s3-drain-timeout"))
+
 	// NATS adapter flags.
 	f.String("nats-url", "nats://localhost:4222", "NATS server URL")
 	f.String("nats-subject", "pgcdc", "NATS subject prefix")
@@ -446,6 +469,7 @@ func runListen(cmd *cobra.Command, args []string) error {
 	hasSearch := false
 	hasRedis := false
 	hasKafka := false
+	hasS3 := false
 	for _, name := range cfg.Adapters {
 		switch name {
 		case "stdout":
@@ -474,10 +498,12 @@ func runListen(cmd *cobra.Command, args []string) error {
 			hasRedis = true
 		case "kafka":
 			hasKafka = true
+		case "s3":
+			hasS3 = true
 		case "grpc":
 			// gRPC adapter has no required config (addr has default).
 		default:
-			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, kafka, or grpc)", name)
+			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, kafka, s3, or grpc)", name)
 		}
 	}
 	if hasWebhook && cfg.Webhook.URL == "" {
@@ -521,6 +547,9 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 	if hasKafka && len(cfg.Kafka.Brokers) == 0 {
 		return fmt.Errorf("kafka adapter requires at least one broker; use --kafka-brokers or set kafka.brokers in config")
+	}
+	if hasS3 && cfg.S3.Bucket == "" {
+		return fmt.Errorf("s3 adapter requires a bucket; use --s3-bucket or set s3.bucket in config")
 	}
 
 	logger := slog.Default()
@@ -846,6 +875,12 @@ func runListen(cmd *cobra.Command, args []string) error {
 			opts = append(opts, pgcdc.WithAdapter(a))
 		case "kafka":
 			a, aErr := makeKafkaAdapter(cfg, kafkaEncoder, logger)
+			if aErr != nil {
+				return aErr
+			}
+			opts = append(opts, pgcdc.WithAdapter(a))
+		case "s3":
+			a, aErr := makeS3Adapter(cfg, logger)
 			if aErr != nil {
 				return aErr
 			}

@@ -121,6 +121,40 @@ var (
 		Help: "Total bytes written to Iceberg storage.",
 	})
 
+	// S3 adapter metrics.
+
+	S3Flushes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_s3_flushes_total",
+		Help: "Total number of S3 flush operations.",
+	}, []string{"status"})
+
+	S3FlushSize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "pgcdc_s3_flush_size",
+		Help:    "Number of events per S3 flush.",
+		Buckets: []float64{10, 100, 500, 1000, 5000, 10000, 50000},
+	})
+
+	S3FlushDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "pgcdc_s3_flush_duration_seconds",
+		Help:    "Duration of S3 flush operations.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	S3BufferSize = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_s3_buffer_size",
+		Help: "Current number of events buffered for S3 flush.",
+	})
+
+	S3ObjectsUploaded = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_s3_objects_uploaded_total",
+		Help: "Total number of objects uploaded to S3.",
+	})
+
+	S3BytesUploaded = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_s3_bytes_uploaded_total",
+		Help: "Total bytes uploaded to S3.",
+	})
+
 	// Incremental snapshot metrics.
 
 	IncrementalSnapshotRowsExported = promauto.NewCounter(prometheus.CounterOpts{
