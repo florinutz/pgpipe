@@ -35,6 +35,7 @@ type Config struct {
 	Backpressure        BackpressureConfig        `mapstructure:"backpressure"`
 	Plugins             PluginConfig              `mapstructure:"plugins"`
 	Encoding            EncodingConfig            `mapstructure:"encoding"`
+	MySQL               MySQLConfig               `mapstructure:"mysql"`
 	OTel                OTelConfig                `mapstructure:"otel"`
 }
 
@@ -303,6 +304,19 @@ type PluginSpec struct {
 	Config map[string]any `mapstructure:"config"`
 }
 
+type MySQLConfig struct {
+	Addr         string        `mapstructure:"addr"` // host:port
+	User         string        `mapstructure:"user"`
+	Password     string        `mapstructure:"password"`
+	ServerID     uint32        `mapstructure:"server_id"`
+	Tables       []string      `mapstructure:"tables"` // schema.table filter
+	UseGTID      bool          `mapstructure:"use_gtid"`
+	Flavor       string        `mapstructure:"flavor"`        // "mysql" or "mariadb"
+	BinlogPrefix string        `mapstructure:"binlog_prefix"` // default: "mysql-bin"
+	BackoffBase  time.Duration `mapstructure:"backoff_base"`
+	BackoffCap   time.Duration `mapstructure:"backoff_cap"`
+}
+
 type EncodingConfig struct {
 	SchemaRegistryURL      string `mapstructure:"schema_registry_url"`
 	SchemaRegistryUsername string `mapstructure:"schema_registry_username"`
@@ -428,6 +442,12 @@ func Default() Config {
 			CriticalThreshold: 2 * 1024 * 1024 * 1024, // 2 GB
 			MaxThrottle:       500 * time.Millisecond,
 			PollInterval:      10 * time.Second,
+		},
+		MySQL: MySQLConfig{
+			Flavor:       "mysql",
+			BinlogPrefix: "mysql-bin",
+			BackoffBase:  5 * time.Second,
+			BackoffCap:   60 * time.Second,
 		},
 		OTel: OTelConfig{
 			Exporter:    "none",

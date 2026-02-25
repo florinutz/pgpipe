@@ -413,6 +413,18 @@ var (
 		Help: "Events auto-acked due to backpressure load shedding.",
 	}, []string{"adapter"})
 
+	// MySQL detector metrics.
+
+	MySQLEventsReceived = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_mysql_events_received_total",
+		Help: "Total number of events received from MySQL binlog.",
+	})
+
+	MySQLErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_mysql_errors_total",
+		Help: "Total number of MySQL binlog replication errors.",
+	})
+
 	// Config reload metrics.
 
 	ConfigReloads = promauto.NewCounter(prometheus.CounterOpts{

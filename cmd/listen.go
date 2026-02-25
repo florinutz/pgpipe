@@ -32,6 +32,7 @@ import (
 	"github.com/florinutz/pgcdc/checkpoint"
 	"github.com/florinutz/pgcdc/detector"
 	"github.com/florinutz/pgcdc/detector/listennotify"
+	mysqldetector "github.com/florinutz/pgcdc/detector/mysql"
 	"github.com/florinutz/pgcdc/detector/outbox"
 	"github.com/florinutz/pgcdc/detector/walreplication"
 	"github.com/florinutz/pgcdc/dlq"
@@ -68,7 +69,7 @@ func init() {
 	f.Int("retries", 5, "webhook max retries")
 	f.String("signing-key", "", "HMAC signing key for webhook")
 	f.String("metrics-addr", "", "standalone metrics/health server address (e.g. :9090)")
-	f.String("detector", "listen_notify", "detector type: listen_notify, wal, or outbox")
+	f.String("detector", "listen_notify", "detector type: listen_notify, wal, outbox, or mysql")
 	f.String("publication", "", "PostgreSQL publication name (required for --detector wal)")
 	f.Bool("all-tables", false, "auto-create a FOR ALL TABLES publication and start WAL streaming (zero-config)")
 	f.Bool("tx-metadata", false, "include transaction metadata in WAL events (xid, commit_time, seq)")
@@ -226,6 +227,25 @@ func init() {
 	f.Duration("outbox-poll-interval", 500*time.Millisecond, "outbox polling interval")
 	f.Int("outbox-batch-size", 100, "outbox batch size per poll")
 	f.Bool("outbox-keep-processed", false, "keep processed outbox rows (set processed_at instead of DELETE)")
+
+	// MySQL detector flags (read directly, not viper-bound — same pattern as snapshot flags).
+	f.String("mysql-addr", "", "MySQL address (host:port)")
+	f.String("mysql-user", "", "MySQL user")
+	f.String("mysql-password", "", "MySQL password")
+	f.Uint32("mysql-server-id", 0, "MySQL server ID for replication (must be > 0)")
+	f.StringSlice("mysql-tables", nil, "MySQL tables to replicate (schema.table format, repeatable)")
+	f.Bool("mysql-gtid", false, "use GTID-based replication instead of file+position")
+	f.String("mysql-flavor", "mysql", "MySQL flavor: mysql or mariadb")
+	f.String("mysql-binlog-prefix", "mysql-bin", "binlog filename prefix for position decoding")
+
+	mustBindPFlag("mysql.addr", f.Lookup("mysql-addr"))
+	mustBindPFlag("mysql.user", f.Lookup("mysql-user"))
+	mustBindPFlag("mysql.password", f.Lookup("mysql-password"))
+	mustBindPFlag("mysql.server_id", f.Lookup("mysql-server-id"))
+	mustBindPFlag("mysql.tables", f.Lookup("mysql-tables"))
+	mustBindPFlag("mysql.use_gtid", f.Lookup("mysql-gtid"))
+	mustBindPFlag("mysql.flavor", f.Lookup("mysql-flavor"))
+	mustBindPFlag("mysql.binlog_prefix", f.Lookup("mysql-binlog-prefix"))
 
 	// Bus mode flag.
 	f.String("bus-mode", "fast", "bus fan-out mode: fast (drop on full) or reliable (block on full)")
@@ -778,8 +798,26 @@ func runListen(cmd *cobra.Command, args []string) error {
 			cfg.Outbox.BackoffCap,
 			logger,
 		)
+	case "mysql":
+		if cfg.MySQL.ServerID == 0 {
+			return fmt.Errorf("--mysql-server-id is required and must be > 0 for MySQL detector")
+		}
+		if cfg.MySQL.Addr == "" {
+			return fmt.Errorf("--mysql-addr is required for MySQL detector")
+		}
+		mysqlDet := mysqldetector.New(
+			cfg.MySQL.Addr, cfg.MySQL.User, cfg.MySQL.Password,
+			cfg.MySQL.ServerID, cfg.MySQL.Tables, cfg.MySQL.UseGTID,
+			cfg.MySQL.Flavor, cfg.MySQL.BinlogPrefix,
+			cfg.MySQL.BackoffBase, cfg.MySQL.BackoffCap,
+			logger,
+		)
+		if tp != nil {
+			mysqlDet.SetTracer(tp.Tracer("pgcdc"))
+		}
+		det = mysqlDet
 	default:
-		return fmt.Errorf("unknown detector type: %q (expected listen_notify, wal, or outbox)", cfg.Detector.Type)
+		return fmt.Errorf("unknown detector type: %q (expected listen_notify, wal, outbox, or mysql)", cfg.Detector.Type)
 	}
 
 	// Create adapters.
