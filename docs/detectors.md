@@ -36,6 +36,30 @@ pgcdc listen --detector wal --publication pgcdc_orders --db postgres://...
 - **Schema evolution**: `--schema-events` emits SCHEMA_CHANGE events
 - **Heartbeat**: `--heartbeat-interval 30s` prevents WAL bloat on idle databases
 - **Slot lag monitoring**: `pgcdc_slot_lag_bytes` metric + `--slot-lag-warn` threshold
+- **TOAST cache**: `--toast-cache` resolves unchanged TOAST columns without `REPLICA IDENTITY FULL` (see below)
+
+### TOAST Column Handling
+
+PostgreSQL stores large column values (>2KB) out-of-line via TOAST. With `REPLICA IDENTITY DEFAULT`, UPDATE events for unchanged TOAST columns arrive in the WAL with no data — only a marker saying the value is unchanged.
+
+By default pgcdc emits these as:
+```json
+{"op":"UPDATE","row":{"id":"42","status":"shipped","description":null},"_unchanged_toast_columns":["description"]}
+```
+
+Enable the TOAST cache to resolve them automatically:
+
+```bash
+pgcdc listen --detector wal --publication pgcdc_orders \
+  --toast-cache --toast-cache-max-entries 100000 \
+  --db postgres://...
+```
+
+The cache stores the most recent full row per `(table, primary key)`. On UPDATE, unchanged columns are backfilled from the cached row. On cache hit the event looks like a normal full row with no `_unchanged_toast_columns` field.
+
+**When the cache can't help** (cold start, evicted entry, no PK): the column is `null` and `_unchanged_toast_columns` lists the affected columns. Consumers should check for this field when `REPLICA IDENTITY FULL` is not set.
+
+The alternative — `ALTER TABLE orders REPLICA IDENTITY FULL` — writes the full old row on every UPDATE, doubling WAL volume. The TOAST cache is a lower-cost option for read-heavy tables with large columns.
 
 ### Slot Management
 

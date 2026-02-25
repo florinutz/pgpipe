@@ -23,6 +23,7 @@ import (
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/tracing"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -277,7 +278,7 @@ func (a *Adapter) handleEvent(ctx context.Context, client *kgo.Client, ev event.
 			}
 			return nil
 		}
-		return fmt.Errorf("produce message: %w", produceErr)
+		return pgcdcerr.WrapEvent(produceErr, adapterName, ev)
 	}
 
 	if span != nil {

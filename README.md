@@ -390,6 +390,38 @@ Context ──▶ Pipeline (pgcdc.go)
 - **Routing**: Bus-level filtering before fan-out. No event copies wasted.
 - **DLQ**: Failed events captured to stderr or PG table for inspection/replay.
 - **Operations**: INSERT, UPDATE, DELETE, TRUNCATE (WAL detector).
+- **TOAST cache**: `--toast-cache` resolves unchanged large columns without `REPLICA IDENTITY FULL` (see below).
+
+## TOAST Column Handling
+
+PostgreSQL stores large column values (>2KB) out-of-line via TOAST. With `REPLICA IDENTITY DEFAULT` (the default), unchanged TOAST columns on UPDATE events arrive with no data in the WAL. Without special handling, downstream consumers see `null` for those columns.
+
+pgcdc ships a two-layer solution:
+
+**Layer 1 — In-memory cache** (opt-in):
+
+```bash
+pgcdc listen --detector wal --publication pgcdc_orders \
+  --toast-cache --toast-cache-max-entries 100000 \
+  --db postgres://...
+```
+
+The cache stores the most recent full row per `(table, primary key)`. On INSERT it's populated; on UPDATE unchanged columns are backfilled from the cached row. The consumer sees a normal, complete event with no special metadata.
+
+**Layer 2 — Structured metadata** (always-on fallback):
+
+On cache miss (cold start, evicted entry, no PK), the event includes null for the unchanged column and a `_unchanged_toast_columns` array:
+
+```json
+{
+  "op": "UPDATE",
+  "table": "orders",
+  "row": {"id": "42", "status": "shipped", "description": null},
+  "_unchanged_toast_columns": ["description"]
+}
+```
+
+**Adapter-aware handling**: the search and redis adapters understand this metadata. The search adapter strips unchanged columns and uses a partial update (PATCH for Typesense, merge for Meilisearch). The redis sync adapter does `GET` → merge → `SET` to avoid overwriting stored data with null.
 
 ## Development
 

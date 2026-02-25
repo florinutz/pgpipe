@@ -59,6 +59,24 @@ pgcdc listen --detector wal --publication pgcdc_orders \
   --db postgres://localhost:5432/mydb
 ```
 
+## TOAST Columns
+
+PostgreSQL stores large values (>2KB) out-of-line via TOAST. With `REPLICA IDENTITY DEFAULT`, UPDATE events for unchanged TOAST columns carry no data. For search this matters: naively upserting a document with a null `body` field would overwrite a properly indexed value.
+
+pgcdc handles this in two ways:
+
+1. **TOAST cache** (recommended): resolves columns before they reach the adapter — the search adapter sees complete documents and batches them normally.
+
+```bash
+pgcdc listen --detector wal --publication pgcdc_articles \
+  --toast-cache \
+  -a search --search-engine typesense \
+  --search-url http://localhost:8108 --search-api-key xyz \
+  --search-index articles --db postgres://...
+```
+
+2. **Automatic partial update** (no cache): when `_unchanged_toast_columns` is present, the adapter strips those fields and sends the update via PATCH (Typesense) or merge-import (Meilisearch), preserving existing indexed content.
+
 ## Routing with Other Adapters
 
 Only send specific channels to search:

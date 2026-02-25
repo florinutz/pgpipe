@@ -1,6 +1,6 @@
 # Adapters
 
-pgcdc ships with 14 built-in adapters. Use `-a <name>` to enable one or more.
+pgcdc ships with 15 built-in adapters. Use `-a <name>` to enable one or more.
 
 ## stdout
 
@@ -92,7 +92,9 @@ pgcdc listen -c pgcdc:articles -a search \
   --search-api-key xyz --search-index articles --db postgres://...
 ```
 
-INSERT/UPDATE -> upsert document (full row as JSON). DELETE -> delete document.
+INSERT/UPDATE → upsert document (full row as JSON). DELETE → delete document.
+
+**TOAST-aware**: when an UPDATE event contains `_unchanged_toast_columns` (unchanged large columns without `REPLICA IDENTITY FULL`), those columns are stripped from the document and the update is sent as a partial update (Typesense `PATCH`, Meilisearch merge) rather than a full upsert. This prevents overwriting existing search-indexed content with null. Pair with `--toast-cache` on the WAL detector to eliminate the metadata entirely on cache hits.
 
 Flags: `--search-engine`, `--search-url`, `--search-api-key`, `--search-index`, `--search-id-column`, `--search-batch-size`, `--search-batch-interval`.
 
@@ -111,6 +113,8 @@ pgcdc listen -c pgcdc:orders -a redis --redis-url redis://localhost:6379 \
 ```
 
 Key format: `<prefix><id_column_value>` (e.g., `orders:42`).
+
+**TOAST-aware** (sync mode): when an UPDATE event contains `_unchanged_toast_columns`, the adapter performs `GET` → merge → `SET` instead of a plain `SET`, so unchanged large columns are not overwritten with null in Redis. Pair with `--toast-cache` on the WAL detector to resolve TOAST columns before they reach the adapter, eliminating the extra GET entirely.
 
 ## embedding
 
