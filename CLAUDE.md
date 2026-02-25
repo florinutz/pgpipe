@@ -51,6 +51,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **Persistent slots + checkpointing**: `--persistent-slot` creates a named, non-temporary replication slot with LSN checkpointing to `pgcdc_checkpoints` table. Survives crash/restart. Configurable via `--slot-name`, `--checkpoint-db`.
 - **Type information**: `--include-schema` adds column type metadata (`columns` array with `name`, `type_oid`, `type_name`) to WAL events. OID-to-name mapping for 40+ common PG types.
 - **Schema evolution**: `--schema-events` emits `SCHEMA_CHANGE` events on `pgcdc:_schema` channel when RelationMessage columns change (added, removed, type changed).
+- **TOAST column cache**: `--toast-cache` enables in-memory LRU cache to resolve unchanged TOAST columns without `REPLICA IDENTITY FULL`. Keyed by `(RelationID, PK)`. INSERT populates cache, UPDATE backfills from cache, DELETE evicts, TRUNCATE/schema change evicts relation. `--toast-cache-max-entries` (default 100K). Cache miss: column set to `null` + `_unchanged_toast_columns` array in payload. Search adapter strips unchanged columns and uses partial update (PATCH). Redis sync mode merges with GET before SET. Metrics: `pgcdc_toast_cache_hits_total`, `pgcdc_toast_cache_misses_total`, `pgcdc_toast_cache_evictions_total`, `pgcdc_toast_cache_entries`.
 - **Heartbeat**: `--heartbeat-interval 30s` periodically writes to `pgcdc_heartbeat` table to keep replication slots advancing on idle databases. Prevents WAL bloat.
 - **Slot lag monitoring**: `pgcdc_slot_lag_bytes` gauge metric + log warnings when lag exceeds `--slot-lag-warn` threshold (default 100MB).
 - **Source-aware backpressure**: `--backpressure` monitors WAL lag and automatically throttles/pauses/sheds to prevent PG disk exhaustion (requires `--detector wal` + `--persistent-slot`). Three zones: green (full speed), yellow (throttle detector + shed best-effort adapters), red (pause detector + shed normal+best-effort). Hysteresis: red exits only when lag drops below warn. Throttle proportional to lag position in yellow band. `--bp-warn-threshold` (default 500MB), `--bp-critical-threshold` (default 2GB), `--bp-max-throttle` (default 500ms), `--bp-poll-interval` (default 10s). `--adapter-priority name=critical|normal|best-effort`. Shed = auto-ack events without delivering (cooperative checkpoint advances normally). Metrics: `pgcdc_backpressure_state`, `pgcdc_backpressure_throttle_duration_seconds`, `pgcdc_backpressure_load_shed_total{adapter}`.
@@ -199,7 +200,7 @@ Each scenario file follows this pattern:
 
 ### Max scenario count
 
-Target: keep scenarios focused and non-overlapping. Currently 38 scenarios — consolidate related ones before adding new ones.
+Target: keep scenarios focused and non-overlapping. Currently 39 scenarios — consolidate related ones before adding new ones.
 
 ## Code Organization
 
@@ -231,6 +232,7 @@ snapshot/       Table snapshot (COPY-based row export + incremental chunk-based)
 detector/       Change detection interface + implementations
   listennotify/ PostgreSQL LISTEN/NOTIFY
   walreplication/ PostgreSQL WAL logical replication
+    toastcache/  In-memory LRU cache for TOAST column resolution
   outbox/       Transactional outbox table polling
   mysql/        MySQL binlog replication
   mongodb/      MongoDB Change Streams
@@ -291,6 +293,7 @@ testutil/       Test utilities
 - `detector/mongodb/mongodb.go` — MongoDB Change Streams detector: watch → emit loop with reconnect
 - `detector/mongodb/resume.go` — Resume token load/save to MongoDB metadata collection
 - `detector/walreplication/oidmap.go` — Static OID → type name mapping for 40+ PG types
+- `detector/walreplication/toastcache/cache.go` — LRU cache for TOAST column resolution (keyed by RelationID+PK)
 - `checkpoint/checkpoint.go` — LSN checkpoint store interface + PG implementation
 - `cmd/slot.go` — Replication slot management CLI (list, status, drop)
 - `plugin/wasm/runtime.go` — Extism module compilation, instance pooling

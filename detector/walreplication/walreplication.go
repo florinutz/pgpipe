@@ -24,6 +24,7 @@ import (
 
 	"github.com/florinutz/pgcdc/backpressure"
 	"github.com/florinutz/pgcdc/checkpoint"
+	"github.com/florinutz/pgcdc/detector/walreplication/toastcache"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/metrics"
@@ -109,6 +110,11 @@ type Detector struct {
 
 	// tracer creates spans for event detection. Nil/noop when tracing disabled.
 	tracer trace.Tracer
+
+	// toastCacheMaxEntries enables the in-memory TOAST column cache when > 0.
+	// The cache stores recent full rows keyed by (RelationID, PK) to backfill
+	// unchanged TOAST columns on UPDATE events without REPLICA IDENTITY FULL.
+	toastCacheMaxEntries int
 }
 
 // txState tracks the current transaction when txMetadata is enabled.
@@ -222,6 +228,13 @@ func (d *Detector) SetCooperativeLSN(fn func() uint64) {
 // SetTracer sets the OpenTelemetry tracer for creating per-event spans.
 func (d *Detector) SetTracer(t trace.Tracer) {
 	d.tracer = t
+}
+
+// SetToastCache enables the in-memory TOAST column cache with the given
+// maximum number of entries. When enabled, the cache backfills unchanged
+// TOAST columns from previous INSERT/UPDATE events.
+func (d *Detector) SetToastCache(maxEntries int) {
+	d.toastCacheMaxEntries = maxEntries
 }
 
 // SetBackpressureController sets the backpressure controller that will
@@ -413,6 +426,13 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 		d.resumeIncompleteSnapshots(ctx, events)
 	}
 
+	// Create TOAST cache if configured (local to this run cycle — fresh on reconnect).
+	var tc *toastcache.Cache
+	if d.toastCacheMaxEntries > 0 {
+		tc = toastcache.New(d.toastCacheMaxEntries, d.logger)
+		d.logger.Info("TOAST column cache enabled", "max_entries", d.toastCacheMaxEntries)
+	}
+
 	// Message loop.
 	clientXLogPos := consistentPoint
 	nextStatusDeadline := time.Now().Add(standbyStatusInterval)
@@ -525,12 +545,17 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 
 			switch m := logicalMsg.(type) {
 			case *pglogrepl.RelationMessage:
-				if d.schemaEvents {
-					if oldRel, exists := relations[m.RelationID]; exists {
-						if changes := diffRelation(oldRel, m); len(changes) > 0 {
+				if oldRel, exists := relations[m.RelationID]; exists {
+					if changes := diffRelation(oldRel, m); len(changes) > 0 {
+						if d.schemaEvents {
 							if err := d.emitSchemaChange(ctx, events, m, changes, clientXLogPos); err != nil {
 								return fmt.Errorf("emit schema change: %w", err)
 							}
+						}
+						// Evict cached rows for this relation on schema change —
+						// column layout changed so cached rows may be stale.
+						if tc != nil {
+							tc.EvictRelation(m.RelationID)
 						}
 					}
 				}
@@ -558,7 +583,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "INSERT", m.Tuple, nil, currentTx, clientXLogPos); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, "INSERT", m.Tuple, nil, currentTx, clientXLogPos, tc); err != nil {
 					return err
 				}
 				if d.incrementalEnabled {
@@ -571,7 +596,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "UPDATE", m.NewTuple, m.OldTuple, currentTx, clientXLogPos); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, "UPDATE", m.NewTuple, m.OldTuple, currentTx, clientXLogPos, tc); err != nil {
 					return err
 				}
 
@@ -579,16 +604,19 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "DELETE", nil, m.OldTuple, currentTx, clientXLogPos); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, "DELETE", nil, m.OldTuple, currentTx, clientXLogPos, tc); err != nil {
 					return err
 				}
 
 			case *pglogrepl.TruncateMessage:
 				for _, relID := range m.RelationIDs {
+					if tc != nil {
+						tc.EvictRelation(relID)
+					}
 					if currentTx != nil {
 						currentTx.seq++
 					}
-					if err := d.emitEvent(ctx, events, relations, relID, "TRUNCATE", nil, nil, currentTx, clientXLogPos); err != nil {
+					if err := d.emitEvent(ctx, events, relations, relID, "TRUNCATE", nil, nil, currentTx, clientXLogPos, tc); err != nil {
 						return err
 					}
 				}
@@ -602,7 +630,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 
 // emitEvent builds an event from WAL data and sends it to the events channel.
 // currentLSN is the WAL position at which this change was received; it is
-// stored on the event for cooperative checkpointing.
+// stored on the event for cooperative checkpointing. tc may be nil.
 func (d *Detector) emitEvent(
 	ctx context.Context,
 	events chan<- event.Event,
@@ -613,6 +641,7 @@ func (d *Detector) emitEvent(
 	oldTuple *pglogrepl.TupleData,
 	tx *txState,
 	currentLSN pglogrepl.LSN,
+	tc *toastcache.Cache,
 ) error {
 	rel, ok := relations[relationID]
 	if !ok {
@@ -623,18 +652,57 @@ func (d *Detector) emitEvent(
 	channel := channelName(rel)
 
 	var row map[string]any
+	var unchangedCols []string
 	if newTuple != nil {
-		row = tupleToMap(rel, newTuple)
+		row, unchangedCols = tupleToMap(rel, newTuple)
 	}
 	var old map[string]any
 	if oldTuple != nil {
-		old = tupleToMap(rel, oldTuple)
+		old, _ = tupleToMap(rel, oldTuple)
 	}
 
 	// For DELETE, "row" is the old row (matches LISTEN/NOTIFY trigger format).
 	if op == "DELETE" && row == nil && old != nil {
 		row = old
 		old = nil
+		unchangedCols = nil // DELETE uses old row; no TOAST concern.
+	}
+
+	// TOAST cache: backfill unchanged columns from cache, then update cache.
+	if tc != nil && row != nil {
+		pk := toastcache.BuildPK(rel, row)
+
+		switch op {
+		case "INSERT":
+			// INSERT always has full row; populate cache.
+			if pk != "" {
+				tc.Put(relationID, pk, copyMap(row))
+			}
+			unchangedCols = nil // INSERT never has unchanged TOAST.
+
+		case "UPDATE":
+			if len(unchangedCols) > 0 && pk != "" {
+				if cached, ok := tc.Get(relationID, pk); ok {
+					// Backfill unchanged columns from cache.
+					for _, col := range unchangedCols {
+						row[col] = cached[col]
+					}
+					unchangedCols = nil
+					metrics.ToastCacheHits.Inc()
+				} else {
+					metrics.ToastCacheMisses.Inc()
+				}
+			}
+			// Update cache with the (possibly merged) row.
+			if pk != "" {
+				tc.Put(relationID, pk, copyMap(row))
+			}
+
+		case "DELETE":
+			if pk != "" {
+				tc.Delete(relationID, pk)
+			}
+		}
 	}
 
 	payload := map[string]any{
@@ -642,6 +710,10 @@ func (d *Detector) emitEvent(
 		"table": rel.RelationName,
 		"row":   row,
 		"old":   old,
+	}
+
+	if len(unchangedCols) > 0 {
+		payload["_unchanged_toast_columns"] = unchangedCols
 	}
 
 	if d.includeSchema {
@@ -761,8 +833,11 @@ func channelName(rel *pglogrepl.RelationMessage) string {
 }
 
 // tupleToMap converts a WAL tuple into a map keyed by column name.
-func tupleToMap(rel *pglogrepl.RelationMessage, tuple *pglogrepl.TupleData) map[string]any {
+// It returns the map and a list of column names that were unchanged TOAST
+// columns (DataType 'u'). These columns are set to nil in the map.
+func tupleToMap(rel *pglogrepl.RelationMessage, tuple *pglogrepl.TupleData) (map[string]any, []string) {
 	m := make(map[string]any, len(tuple.Columns))
+	var unchanged []string
 	for i, col := range tuple.Columns {
 		if i >= len(rel.Columns) {
 			break
@@ -772,12 +847,24 @@ func tupleToMap(rel *pglogrepl.RelationMessage, tuple *pglogrepl.TupleData) map[
 		case 'n': // null
 			m[colName] = nil
 		case 'u': // unchanged TOAST
-			m[colName] = "(unchanged)"
+			m[colName] = nil
+			unchanged = append(unchanged, colName)
 		case 't': // text
+			m[colName] = string(col.Data)
+		case 'b': // binary
 			m[colName] = string(col.Data)
 		}
 	}
-	return m
+	return m, unchanged
+}
+
+// copyMap creates a shallow copy of the map.
+func copyMap(m map[string]any) map[string]any {
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
 }
 
 // ensureReplicationParam appends replication=database to the connection string
@@ -1005,7 +1092,7 @@ func (d *Detector) heartbeatOnce(ctx context.Context, dbURL string) error {
 
 // handleSignal parses a signal table INSERT and dispatches the appropriate action.
 func (d *Detector) handleSignal(ctx context.Context, events chan<- event.Event, rel *pglogrepl.RelationMessage, tuple *pglogrepl.TupleData) {
-	row := tupleToMap(rel, tuple)
+	row, _ := tupleToMap(rel, tuple)
 
 	signal, _ := row["signal"].(string)
 	payloadStr, _ := row["payload"].(string)

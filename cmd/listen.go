@@ -110,6 +110,10 @@ func init() {
 	f.String("snapshot-table", "", "table to snapshot (required with --snapshot-first)")
 	f.String("snapshot-where", "", "optional WHERE clause for snapshot")
 
+	// TOAST cache flags (no viper bindings — read directly to avoid collision).
+	f.Bool("toast-cache", false, "enable in-memory TOAST column cache to resolve unchanged columns without REPLICA IDENTITY FULL (requires --detector wal)")
+	f.Int("toast-cache-max-entries", 100000, "maximum number of rows in the TOAST cache")
+
 	// Incremental snapshot flags (no viper bindings — read directly to avoid collision).
 	f.Bool("incremental-snapshot", false, "enable incremental snapshots via signal table (requires --detector wal)")
 	f.String("snapshot-signal-table", "pgcdc_signals", "signal table name")
@@ -402,6 +406,10 @@ func runListen(cmd *cobra.Command, args []string) error {
 	snapshotTable, _ := cmd.Flags().GetString("snapshot-table")
 	snapshotWhere, _ := cmd.Flags().GetString("snapshot-where")
 
+	// TOAST cache flags (read directly to avoid viper key collisions).
+	toastCache, _ := cmd.Flags().GetBool("toast-cache")
+	toastCacheMaxEntries, _ := cmd.Flags().GetInt("toast-cache-max-entries")
+
 	// Persistent slot flags.
 	persistentSlot, _ := cmd.Flags().GetBool("persistent-slot")
 	slotName, _ := cmd.Flags().GetString("slot-name")
@@ -492,6 +500,9 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 	if bpEnabled && !persistentSlot {
 		return fmt.Errorf("--backpressure requires --persistent-slot")
+	}
+	if toastCache && cfg.Detector.Type != "wal" {
+		return fmt.Errorf("--toast-cache requires --detector wal")
 	}
 
 	// Validate adapters and check requirements early.
@@ -790,6 +801,9 @@ func runListen(cmd *cobra.Command, args []string) error {
 		}
 		if slotLagWarn > 0 {
 			walDet.SetSlotLagWarn(slotLagWarn)
+		}
+		if toastCache {
+			walDet.SetToastCache(toastCacheMaxEntries)
 		}
 		if incrementalSnapshot {
 			walDet.SetIncrementalSnapshot(snapshotSignalTable, snapshotChunkSize, snapshotChunkDelay)
