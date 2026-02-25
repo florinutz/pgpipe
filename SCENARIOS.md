@@ -39,6 +39,7 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | 33 | OTel tracing propagation | `tracing_test.go` | NOTIFY → detector → bus → webhook adapter with stdout tracer: W3C `traceparent` header present in webhook HTTP requests with valid format | N/A (single happy path) |
 | 34 | DLQ commands | `dlq_test.go` | DLQ list shows failed records; replay delivers to new webhook and marks replayed_at; purge --replayed removes replayed records | Replay to still-failing adapter: record NOT marked as replayed |
 | 35 | SIGHUP config reload | `reload_test.go` | Start with `drop_columns: [secret]`, send event, verify `secret` dropped; call `Reload` with `drop_columns: [name]`, send event, verify `secret` present and `name` dropped | Reload with ErrDropEvent transform drops all events; reload back to good config restores delivery |
+| 36 | S3 object storage | `s3_test.go` | NOTIFY → detector → bus → S3 adapter buffers events, flushes partitioned objects (channel+date) to MinIO with correct `.jsonl` extension and parseable content | Parquet format: same flow produces `.parquet` objects with valid Parquet content |
 
 ## Adding a new scenario
 

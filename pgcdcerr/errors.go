@@ -151,6 +151,20 @@ func (e *SchemaRegistryError) Error() string {
 
 func (e *SchemaRegistryError) Unwrap() error { return e.Err }
 
+// S3UploadError indicates that the S3 adapter failed to upload after consecutive attempts.
+type S3UploadError struct {
+	Attempts int
+	Err      error
+}
+
+func (e *S3UploadError) Error() string {
+	return fmt.Sprintf("s3 upload failed after %d consecutive attempts: %v", e.Attempts, e.Err)
+}
+
+func (e *S3UploadError) Unwrap() error {
+	return e.Err
+}
+
 // PluginError indicates that a Wasm plugin call failed.
 type PluginError struct {
 	Plugin string

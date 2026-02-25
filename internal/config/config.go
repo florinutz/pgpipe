@@ -28,6 +28,7 @@ type Config struct {
 	Redis               RedisConfig               `mapstructure:"redis"`
 	GRPC                GRPCConfig                `mapstructure:"grpc"`
 	Kafka               KafkaConfig               `mapstructure:"kafka"`
+	S3                  S3Config                  `mapstructure:"s3"`
 	IncrementalSnapshot IncrementalSnapshotConfig `mapstructure:"incremental_snapshot"`
 	Transforms          TransformConfig           `mapstructure:"transforms"`
 	Routes              map[string][]string       `mapstructure:"routes"` // adapter -> channels
@@ -205,6 +206,21 @@ type KafkaConfig struct {
 	BackoffCap      time.Duration `mapstructure:"backoff_cap"`
 	Encoding        string        `mapstructure:"encoding"`         // json, avro, protobuf
 	TransactionalID string        `mapstructure:"transactional_id"` // empty = idempotent only
+}
+
+type S3Config struct {
+	Bucket          string        `mapstructure:"bucket"`
+	Prefix          string        `mapstructure:"prefix"`
+	Endpoint        string        `mapstructure:"endpoint"`
+	Region          string        `mapstructure:"region"`
+	AccessKeyID     string        `mapstructure:"access_key_id"`
+	SecretAccessKey string        `mapstructure:"secret_access_key"`
+	Format          string        `mapstructure:"format"` // "jsonl" or "parquet"
+	FlushInterval   time.Duration `mapstructure:"flush_interval"`
+	FlushSize       int           `mapstructure:"flush_size"`
+	DrainTimeout    time.Duration `mapstructure:"drain_timeout"`
+	BackoffBase     time.Duration `mapstructure:"backoff_base"`
+	BackoffCap      time.Duration `mapstructure:"backoff_cap"`
 }
 
 type IncrementalSnapshotConfig struct {
@@ -388,6 +404,15 @@ func Default() Config {
 		},
 		GRPC: GRPCConfig{
 			Addr: ":9090",
+		},
+		S3: S3Config{
+			Region:        "us-east-1",
+			Format:        "jsonl",
+			FlushInterval: 1 * time.Minute,
+			FlushSize:     10000,
+			DrainTimeout:  30 * time.Second,
+			BackoffBase:   5 * time.Second,
+			BackoffCap:    60 * time.Second,
 		},
 		Kafka: KafkaConfig{
 			Brokers:     []string{"localhost:9092"},
