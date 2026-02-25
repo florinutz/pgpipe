@@ -199,24 +199,37 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 				return nil
 			}
 
-			doc, id, isDel := a.extractPayload(ev)
+			doc, id, isDel, partial := a.extractPayload(ev)
 			if id == "" {
 				a.logger.Warn("no ID in event payload, skipping", "event_id", ev.ID)
 				continue
 			}
 
-			mu.Lock()
-			if isDel {
+			switch {
+			case isDel:
+				mu.Lock()
 				deletes = append(deletes, id)
-			} else {
+				mu.Unlock()
+			case partial:
+				// Partial update (unchanged TOAST columns stripped):
+				// route to individual update to avoid overwriting existing
+				// fields with null in the search engine.
+				if err := a.updateDocument(ctx, id, doc); err != nil {
+					metrics.SearchErrors.Inc()
+					a.logger.Error("search partial update failed", "id", id, "error", err)
+				} else {
+					metrics.SearchUpserted.Inc()
+				}
+			default:
+				mu.Lock()
 				batch = append(batch, doc)
 				if len(batch) >= a.batchSize {
 					mu.Unlock()
 					flush()
 					continue
 				}
+				mu.Unlock()
 			}
-			mu.Unlock()
 
 			metrics.EventsDelivered.WithLabelValues("search").Inc()
 		}
@@ -225,24 +238,35 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 
 // payload is the decoded event payload.
 type payload struct {
-	Op    string                 `json:"op"`
-	Table string                 `json:"table"`
-	Row   map[string]interface{} `json:"row"`
+	Op             string                 `json:"op"`
+	Table          string                 `json:"table"`
+	Row            map[string]interface{} `json:"row"`
+	UnchangedToast []string               `json:"_unchanged_toast_columns"`
 }
 
-func (a *Adapter) extractPayload(ev event.Event) (doc map[string]interface{}, id string, isDel bool) {
+func (a *Adapter) extractPayload(ev event.Event) (doc map[string]interface{}, id string, isDel bool, partial bool) {
 	var p payload
 	if err := json.Unmarshal(ev.Payload, &p); err != nil {
-		return nil, "", false
+		return nil, "", false, false
 	}
 	isDel = p.Op == "DELETE"
 	if p.Row == nil {
-		return nil, "", isDel
+		return nil, "", isDel, false
 	}
 	if v, ok := p.Row[a.idColumn]; ok && v != nil {
 		id = fmt.Sprintf("%v", v)
 	}
-	return p.Row, id, isDel
+
+	// Strip unchanged TOAST columns from the document so they don't
+	// overwrite existing values in the search engine with null.
+	if len(p.UnchangedToast) > 0 {
+		for _, col := range p.UnchangedToast {
+			delete(p.Row, col)
+		}
+		partial = true
+	}
+
+	return p.Row, id, isDel, partial
 }
 
 func (a *Adapter) upsertDocuments(ctx context.Context, docs []map[string]interface{}) error {
@@ -279,6 +303,36 @@ func (a *Adapter) upsertDocuments(ctx context.Context, docs []map[string]interfa
 	}
 
 	return a.doRequest(ctx, http.MethodPost, url, body)
+}
+
+// updateDocument performs a partial update on a single document. For Typesense,
+// this uses PATCH to update only the provided fields. For Meilisearch, the
+// standard document endpoint merges by default (missing fields are retained).
+func (a *Adapter) updateDocument(ctx context.Context, id string, doc map[string]interface{}) error {
+	body, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("marshal doc: %w", err)
+	}
+
+	var reqURL string
+	var method string
+	switch a.engine {
+	case "typesense":
+		reqURL = fmt.Sprintf("%s/collections/%s/documents/%s", a.url, a.index, id)
+		method = http.MethodPatch
+	case "meilisearch":
+		// Meilisearch merges by default; wrapping in array for single-doc import.
+		reqURL = fmt.Sprintf("%s/indexes/%s/documents", a.url, a.index)
+		method = http.MethodPost
+		body, err = json.Marshal([]map[string]interface{}{doc})
+		if err != nil {
+			return fmt.Errorf("marshal doc array: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported search engine: %s", a.engine)
+	}
+
+	return a.doRequest(ctx, method, reqURL, body)
 }
 
 func (a *Adapter) deleteDocument(ctx context.Context, id string) error {

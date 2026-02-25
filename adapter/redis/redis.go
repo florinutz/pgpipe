@@ -123,7 +123,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 				return nil
 			}
 
-			id, row, isDel := a.extractPayload(ev)
+			id, row, isDel, unchangedToast := a.extractPayload(ev)
 			if id == "" {
 				a.logger.Warn("no ID in event payload, skipping", "event_id", ev.ID)
 				continue
@@ -158,7 +158,33 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 
 			default:
 				// sync mode INSERT/UPDATE
-				data, err := json.Marshal(row)
+				finalRow := row
+
+				// When unchanged TOAST columns are present, merge with
+				// the existing Redis value so we don't overwrite stored
+				// fields with null.
+				if len(unchangedToast) > 0 {
+					existing, getErr := rdb.Get(ctx, key).Result()
+					if getErr == nil {
+						var existingRow map[string]interface{}
+						if json.Unmarshal([]byte(existing), &existingRow) == nil {
+							// Start with existing, overlay changed fields.
+							toastSet := make(map[string]struct{}, len(unchangedToast))
+							for _, col := range unchangedToast {
+								toastSet[col] = struct{}{}
+							}
+							for k, v := range row {
+								if _, skip := toastSet[k]; !skip {
+									existingRow[k] = v
+								}
+							}
+							finalRow = existingRow
+						}
+					}
+					// If GET fails (key doesn't exist), SET as-is (best effort).
+				}
+
+				data, err := json.Marshal(finalRow)
 				if err != nil {
 					a.logger.Warn("marshal row failed, skipping", "event_id", ev.ID, "error", err)
 					continue
@@ -180,24 +206,25 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 }
 
 type payload struct {
-	Op    string                 `json:"op"`
-	Table string                 `json:"table"`
-	Row   map[string]interface{} `json:"row"`
+	Op             string                 `json:"op"`
+	Table          string                 `json:"table"`
+	Row            map[string]interface{} `json:"row"`
+	UnchangedToast []string               `json:"_unchanged_toast_columns"`
 }
 
-func (a *Adapter) extractPayload(ev event.Event) (id string, row map[string]interface{}, isDel bool) {
+func (a *Adapter) extractPayload(ev event.Event) (id string, row map[string]interface{}, isDel bool, unchangedToast []string) {
 	var p payload
 	if err := json.Unmarshal(ev.Payload, &p); err != nil {
-		return "", nil, false
+		return "", nil, false, nil
 	}
 	isDel = p.Op == "DELETE"
 	if p.Row == nil {
-		return "", nil, isDel
+		return "", nil, isDel, nil
 	}
 	if v, ok := p.Row[a.idColumn]; ok && v != nil {
 		id = fmt.Sprintf("%v", v)
 	}
-	return id, p.Row, isDel
+	return id, p.Row, isDel, p.UnchangedToast
 }
 
 func (a *Adapter) recordDLQ(ctx context.Context, ev event.Event, err error) {

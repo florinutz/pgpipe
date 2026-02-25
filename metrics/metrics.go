@@ -453,4 +453,26 @@ var (
 		Name: "pgcdc_config_reload_errors_total",
 		Help: "Total number of failed config reload attempts.",
 	})
+
+	// TOAST cache metrics.
+
+	ToastCacheHits = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_toast_cache_hits_total",
+		Help: "Total number of TOAST cache hits (unchanged columns resolved from cache).",
+	})
+
+	ToastCacheMisses = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_toast_cache_misses_total",
+		Help: "Total number of TOAST cache misses (unchanged columns emitted as metadata).",
+	})
+
+	ToastCacheEvictions = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_toast_cache_evictions_total",
+		Help: "Total number of TOAST cache LRU evictions.",
+	})
+
+	ToastCacheEntries = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_toast_cache_entries",
+		Help: "Current number of entries in the TOAST cache.",
+	})
 )

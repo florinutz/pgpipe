@@ -42,6 +42,7 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | 36 | S3 object storage | `s3_test.go` | NOTIFY → detector → bus → S3 adapter buffers events, flushes partitioned objects (channel+date) to MinIO with correct `.jsonl` extension and parseable content | Parquet format: same flow produces `.parquet` objects with valid Parquet content |
 | 37 | MySQL binlog detector | `mysql_test.go` | MySQL binlog replication captures INSERT/UPDATE/DELETE from MySQL 8.0; events have correct channel (`pgcdc:schema.table`), operation, payload with row/old, source=`mysql_binlog` | Reconnect after disconnect: KILL binlog dump connection, detector reconnects, new events arrive |
 | 38 | MongoDB change streams | `mongodb_test.go` | MongoDB change stream captures INSERT/UPDATE/DELETE from MongoDB 7.0 replica set; events have correct channel (`pgcdc:db.coll`), operation, payload with row/document_key, source=`mongodb_changestream` | Resume after disconnect: stop detector, insert while down, restart, verify missed event arrives via resume token |
+| 39 | TOAST column cache | `toast_cache_test.go` | WAL replication with REPLICA IDENTITY DEFAULT + TOAST cache: INSERT large text, UPDATE different column, verify UPDATE event has full text resolved from cache (no `_unchanged_toast_columns`) | Cache miss: pipeline starts after INSERT, UPDATE emits `_unchanged_toast_columns` metadata with `description` column and null value |
 
 ## Adding a new scenario
 
