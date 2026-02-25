@@ -165,6 +165,20 @@ func (e *S3UploadError) Unwrap() error {
 	return e.Err
 }
 
+// MySQLReplicationError indicates that the MySQL binlog detector encountered an error.
+type MySQLReplicationError struct {
+	Addr string
+	Err  error
+}
+
+func (e *MySQLReplicationError) Error() string {
+	return fmt.Sprintf("mysql replication error (addr %s): %v", e.Addr, e.Err)
+}
+
+func (e *MySQLReplicationError) Unwrap() error {
+	return e.Err
+}
+
 // PluginError indicates that a Wasm plugin call failed.
 type PluginError struct {
 	Plugin string

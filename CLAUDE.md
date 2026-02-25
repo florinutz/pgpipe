@@ -1,6 +1,6 @@
 # pgcdc
 
-PostgreSQL change data capture (LISTEN/NOTIFY, WAL logical replication, or outbox pattern) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, gRPC, and S3-compatible object storage.
+PostgreSQL and MySQL change data capture (LISTEN/NOTIFY, WAL logical replication, outbox pattern, or MySQL binlog) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, gRPC, and S3-compatible object storage.
 
 ## Quick Start
 
@@ -24,7 +24,8 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
   Detector ──> Bus (fan-out + routing) ──> Adapter (stdout)
   (listennotify     |                   ──> Adapter (webhook)     ──> DLQ
    walreplication   |                   ──> Adapter (file)
-   or outbox)       |                   ──> Adapter (exec)
+   outbox           |                   ──> Adapter (exec)
+   or mysql)        |
                     |                   ──> Adapter (pg_table)
                     |                   ──> Adapter (SSE broker)  ──> HTTP server
               ingest chan               ──> Adapter (WS broker)   ──> HTTP server
@@ -61,6 +62,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **Kafka adapter**: `--adapter kafka` publishes events to Kafka topics with per-event key (`event.ID`), headers (`pgcdc-channel`, `pgcdc-operation`, `pgcdc-event-id`), and `RequireAll` acks. Channel-to-topic mapping: `pgcdc:orders` → `pgcdc.orders`. `--kafka-topic` overrides with a fixed topic. SASL (plain, SCRAM-SHA-256/512) and TLS supported. Terminal Kafka errors (non-retriable) go to DLQ; connection errors trigger reconnect with backoff. `--kafka-transactional-id` enables exactly-once delivery via Kafka transactions (each event produced in its own transaction).
 - **Event routing**: `--route adapter=channel1,channel2`. Bus-level filtering before fan-out. Adapters without routes receive all events.
 - **Outbox detector**: `--detector outbox` polls a transactional outbox table using `SELECT ... FOR UPDATE SKIP LOCKED` for concurrency-safe processing. Configurable DELETE or `processed_at` update cleanup.
+- **MySQL binlog detector**: `--detector mysql` connects to MySQL as a replication slave using `go-mysql-org/go-mysql` `BinlogSyncer`. Captures INSERT/UPDATE/DELETE from MySQL binlog (ROW format required). `--mysql-addr`, `--mysql-user`, `--mysql-password`, `--mysql-server-id` (required, > 0), `--mysql-tables` (schema.table filter), `--mysql-gtid` (GTID mode), `--mysql-flavor` (mysql/mariadb). Events emitted on `pgcdc:<schema>.<table>` channels. Column names resolved from TableMapEvent metadata (MySQL 8.0.1+), `information_schema` fallback, or `col_N` fallback. Position encoded as `(file_seq << 32) | offset` for checkpoint compatibility.
 - **Shutdown**: Signal cancels root context. Bus closes subscriber channels. HTTP server gets `shutdown_timeout` (default 5s) `context.WithTimeout` for graceful drain.
 - **SIGHUP config reload**: `kill -HUP <pid>` re-reads the YAML config file and atomically swaps `transforms:` and `routes:` sections for all running adapters with zero event loss. CLI flags, plugin transforms, adapters, detectors, and bus mode remain immutable. Implementation: `sync/atomic.Pointer[wrapperConfig]` per adapter; the wrapper goroutine loads from this pointer on every event. `Pipeline.Reload(ReloadConfig)` rebuilds and stores atomically. Metrics: `pgcdc_config_reloads_total`, `pgcdc_config_reload_errors_total`. YAML `routes:` section maps adapter names to channel lists (CLI `--route` wins for same adapter name).
 - **Wiring**: `pgcdc.go` provides the reusable `Pipeline` type (detector + bus + adapters). `cmd/listen.go` adds CLI-specific HTTP servers on top.
@@ -125,7 +127,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 
 ## Dependencies
 
-Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `twmb/franz-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `extism/go-sdk` (Wasm plugin runtime), `testcontainers-go` (test only).
+Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `twmb/franz-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `extism/go-sdk` (Wasm plugin runtime), `go-mysql-org/go-mysql` (MySQL binlog replication), `go-sql-driver/mysql` (MySQL driver for schema queries), `testcontainers-go` (test only).
 
 ## Testing
 
@@ -223,6 +225,7 @@ detector/       Change detection interface + implementations
   listennotify/ PostgreSQL LISTEN/NOTIFY
   walreplication/ PostgreSQL WAL logical replication
   outbox/       Transactional outbox table polling
+  mysql/        MySQL binlog replication
 checkpoint/     LSN checkpoint storage
 event/          Event model
 health/         Component health checker
@@ -267,6 +270,8 @@ testutil/       Test utilities
 - `adapter/s3/writer.go` — S3 format writers: JSON Lines + Parquet (Snappy)
 - `dlq/dlq.go` — DLQ interface + StderrDLQ + PGTableDLQ + NopDLQ
 - `detector/outbox/outbox.go` — Outbox detector: poll-based with FOR UPDATE SKIP LOCKED
+- `detector/mysql/mysql.go` — MySQL binlog detector: BinlogSyncer-based CDC with reconnect loop
+- `detector/mysql/position.go` — MySQL binlog position ↔ uint64 encoding for checkpoint compatibility
 - `detector/walreplication/oidmap.go` — Static OID → type name mapping for 40+ PG types
 - `checkpoint/checkpoint.go` — LSN checkpoint store interface + PG implementation
 - `cmd/slot.go` — Replication slot management CLI (list, status, drop)

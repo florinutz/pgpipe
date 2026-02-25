@@ -41,6 +41,8 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | 35 | SIGHUP config reload | `reload_test.go` | Start with `drop_columns: [secret]`, send event, verify `secret` dropped; call `Reload` with `drop_columns: [name]`, send event, verify `secret` present and `name` dropped | Reload with ErrDropEvent transform drops all events; reload back to good config restores delivery |
 | 36 | S3 object storage | `s3_test.go` | NOTIFY → detector → bus → S3 adapter buffers events, flushes partitioned objects (channel+date) to MinIO with correct `.jsonl` extension and parseable content | Parquet format: same flow produces `.parquet` objects with valid Parquet content |
 
+| 37 | MySQL binlog detector | `mysql_test.go` | MySQL binlog replication captures INSERT/UPDATE/DELETE from MySQL 8.0; events have correct channel (`pgcdc:schema.table`), operation, payload with row/old, source=`mysql_binlog` | Reconnect after disconnect: KILL binlog dump connection, detector reconnects, new events arrive |
+
 ## Adding a new scenario
 
 1. Create `scenarios/<name>_test.go`
