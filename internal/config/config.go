@@ -38,6 +38,7 @@ type Config struct {
 	MySQL               MySQLConfig               `mapstructure:"mysql"`
 	MongoDB             MongoDBConfig             `mapstructure:"mongodb"`
 	OTel                OTelConfig                `mapstructure:"otel"`
+	KafkaServer         KafkaServerConfig         `mapstructure:"kafkaserver"`
 }
 
 type OTelConfig struct {
@@ -330,6 +331,15 @@ type MongoDBConfig struct {
 	BackoffCap   time.Duration `mapstructure:"backoff_cap"`
 }
 
+type KafkaServerConfig struct {
+	Addr           string        `mapstructure:"addr"`
+	PartitionCount int           `mapstructure:"partition_count"`
+	BufferSize     int           `mapstructure:"buffer_size"`
+	SessionTimeout time.Duration `mapstructure:"session_timeout"`
+	CheckpointDB   string        `mapstructure:"checkpoint_db"`
+	KeyColumn      string        `mapstructure:"key_column"`
+}
+
 type EncodingConfig struct {
 	SchemaRegistryURL      string `mapstructure:"schema_registry_url"`
 	SchemaRegistryUsername string `mapstructure:"schema_registry_username"`
@@ -472,6 +482,13 @@ func Default() Config {
 		OTel: OTelConfig{
 			Exporter:    "none",
 			SampleRatio: 1.0,
+		},
+		KafkaServer: KafkaServerConfig{
+			Addr:           ":9092",
+			PartitionCount: 8,
+			BufferSize:     10000,
+			SessionTimeout: 30 * time.Second,
+			KeyColumn:      "id",
 		},
 		Embedding: EmbeddingConfig{
 			Model:       "text-embedding-3-small",

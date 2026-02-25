@@ -227,6 +227,14 @@ func init() {
 	// gRPC adapter flags.
 	f.String("grpc-addr", ":9090", "gRPC server listen address")
 
+	// Kafka server adapter flags.
+	f.String("kafkaserver-addr", ":9092", "Kafka protocol server listen address")
+	f.Int("kafkaserver-partitions", 8, "number of partitions per topic")
+	f.Int("kafkaserver-buffer-size", 10000, "ring buffer size per partition")
+	f.Duration("kafkaserver-session-timeout", 30*time.Second, "consumer group session timeout")
+	f.String("kafkaserver-checkpoint-db", "", "PostgreSQL URL for offset storage (default: same as --db)")
+	f.String("kafkaserver-key-column", "id", "JSON field used as partition key")
+
 	// Outbox detector flags.
 	f.String("outbox-table", "pgcdc_outbox", "outbox table name")
 	f.Duration("outbox-poll-interval", 500*time.Millisecond, "outbox polling interval")
@@ -331,6 +339,13 @@ func init() {
 	mustBindPFlag("redis.id_column", f.Lookup("redis-id-column"))
 
 	mustBindPFlag("grpc.addr", f.Lookup("grpc-addr"))
+
+	mustBindPFlag("kafkaserver.addr", f.Lookup("kafkaserver-addr"))
+	mustBindPFlag("kafkaserver.partition_count", f.Lookup("kafkaserver-partitions"))
+	mustBindPFlag("kafkaserver.buffer_size", f.Lookup("kafkaserver-buffer-size"))
+	mustBindPFlag("kafkaserver.session_timeout", f.Lookup("kafkaserver-session-timeout"))
+	mustBindPFlag("kafkaserver.checkpoint_db", f.Lookup("kafkaserver-checkpoint-db"))
+	mustBindPFlag("kafkaserver.key_column", f.Lookup("kafkaserver-key-column"))
 
 	mustBindPFlag("outbox.table", f.Lookup("outbox-table"))
 	mustBindPFlag("outbox.poll_interval", f.Lookup("outbox-poll-interval"))
@@ -547,12 +562,14 @@ func runListen(cmd *cobra.Command, args []string) error {
 			hasRedis = true
 		case "kafka":
 			hasKafka = true
+		case "kafkaserver":
+			// kafkaserver adapter has no required config (addr has default).
 		case "s3":
 			hasS3 = true
 		case "grpc":
 			// gRPC adapter has no required config (addr has default).
 		default:
-			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, kafka, s3, or grpc)", name)
+			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, kafka, kafkaserver, s3, or grpc)", name)
 		}
 	}
 	if hasWebhook && cfg.Webhook.URL == "" {
@@ -963,6 +980,24 @@ func runListen(cmd *cobra.Command, args []string) error {
 			opts = append(opts, pgcdc.WithAdapter(a))
 		case "kafka":
 			a, aErr := makeKafkaAdapter(cfg, kafkaEncoder, logger)
+			if aErr != nil {
+				return aErr
+			}
+			opts = append(opts, pgcdc.WithAdapter(a))
+		case "kafkaserver":
+			var ksCpStore checkpoint.Store
+			ksCheckpointDB := cfg.KafkaServer.CheckpointDB
+			if ksCheckpointDB == "" {
+				ksCheckpointDB = cfg.DatabaseURL
+			}
+			if ksCheckpointDB != "" {
+				var cpErr error
+				ksCpStore, cpErr = checkpoint.NewPGStore(ctx, ksCheckpointDB, logger)
+				if cpErr != nil {
+					return fmt.Errorf("create kafkaserver checkpoint store: %w", cpErr)
+				}
+			}
+			a, aErr := makeKafkaServerAdapter(cfg, ksCpStore, logger)
 			if aErr != nil {
 				return aErr
 			}

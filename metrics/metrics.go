@@ -442,6 +442,43 @@ var (
 		Help: "Total number of resume token saves to MongoDB.",
 	})
 
+	// Kafka server adapter metrics.
+
+	KafkaServerConnectionsActive = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_kafkaserver_connections_active",
+		Help: "Number of active Kafka protocol server connections.",
+	})
+
+	KafkaServerFetchRequests = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_kafkaserver_fetch_requests_total",
+		Help: "Total number of Kafka Fetch requests received.",
+	})
+
+	KafkaServerRecordsFetched = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_kafkaserver_records_fetched_total",
+		Help: "Total number of records returned in Kafka Fetch responses.",
+	})
+
+	KafkaServerGroupRebalances = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_kafkaserver_group_rebalances_total",
+		Help: "Total number of consumer group rebalances.",
+	})
+
+	KafkaServerOffsetCommits = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_kafkaserver_offset_commits_total",
+		Help: "Total number of offset commits.",
+	})
+
+	KafkaServerProtocolErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_kafkaserver_protocol_errors_total",
+		Help: "Total number of Kafka protocol errors.",
+	})
+
+	KafkaServerBufferUsage = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pgcdc_kafkaserver_buffer_usage",
+		Help: "Current buffer usage per topic/partition.",
+	}, []string{"topic", "partition"})
+
 	// Config reload metrics.
 
 	ConfigReloads = promauto.NewCounter(prometheus.CounterOpts{
