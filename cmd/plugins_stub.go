@@ -11,6 +11,7 @@ import (
 	"github.com/florinutz/pgcdc/checkpoint"
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/internal/config"
+
 	"github.com/spf13/cobra"
 )
 
@@ -36,6 +37,6 @@ func wirePluginAdapters(_ context.Context, _ any, _ *cobra.Command, _ config.Con
 	return nil, func() {}, nil
 }
 
-func buildPluginTransformOpts(_ context.Context, _ any, _ *cobra.Command, _ config.Config, _ *slog.Logger) ([]pgcdc.Option, func()) {
-	return nil, func() {}
+func buildPluginTransformOpts(_ context.Context, _ any, _ *cobra.Command, _ config.Config, _ *slog.Logger) ([]pgcdc.Option, pluginTransforms, func()) {
+	return nil, pluginTransforms{}, func() {}
 }

@@ -378,4 +378,16 @@ var (
 		Name: "pgcdc_backpressure_load_shed_total",
 		Help: "Events auto-acked due to backpressure load shedding.",
 	}, []string{"adapter"})
+
+	// Config reload metrics.
+
+	ConfigReloads = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_config_reloads_total",
+		Help: "Total number of successful config reloads via SIGHUP.",
+	})
+
+	ConfigReloadErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_config_reload_errors_total",
+		Help: "Total number of failed config reload attempts.",
+	})
 )
