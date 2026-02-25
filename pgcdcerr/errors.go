@@ -193,6 +193,20 @@ func (e *MongoDBChangeStreamError) Unwrap() error {
 	return e.Err
 }
 
+// KafkaServerError indicates that the Kafka protocol server adapter encountered an error.
+type KafkaServerError struct {
+	Addr string
+	Err  error
+}
+
+func (e *KafkaServerError) Error() string {
+	return fmt.Sprintf("kafkaserver error (addr %s): %v", e.Addr, e.Err)
+}
+
+func (e *KafkaServerError) Unwrap() error {
+	return e.Err
+}
+
 // PluginError indicates that a Wasm plugin call failed.
 type PluginError struct {
 	Plugin string

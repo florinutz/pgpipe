@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/florinutz/pgcdc.svg)](https://pkg.go.dev/github.com/florinutz/pgcdc)
 
-15 adapters | 5 detectors | PostgreSQL + MySQL + MongoDB | Persistent slots | Dead letter queue | Event routing | Zero infrastructure
+16 adapters | 5 detectors | PostgreSQL + MySQL + MongoDB | Persistent slots | Dead letter queue | Event routing | Zero infrastructure
 
 ```bash
 go install github.com/florinutz/pgcdc/cmd/pgcdc@latest
@@ -124,6 +124,7 @@ pgcdc listen --detector mongodb \
 | **embedding** | `-a embedding --embedding-api-url <url>` | OpenAI-compatible API → pgvector UPSERT. |
 | **s3** | `-a s3 --s3-bucket <name>` | Flush to S3-compatible storage (JSON Lines/Parquet). |
 | **iceberg** | `-a iceberg --iceberg-warehouse <path>` | Apache Iceberg table writes. |
+| **kafkaserver** | `-a kafkaserver --kafkaserver-addr :9092` | Kafka wire protocol server. Any Kafka consumer connects directly — no Kafka cluster needed. Channels become topics, N partitions, consumer groups. |
 
 Use multiple adapters: `-a stdout -a webhook -a redis`
 
