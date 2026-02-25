@@ -221,12 +221,18 @@ type TransformConfig struct {
 }
 
 type TransformSpec struct {
-	Type     string            `mapstructure:"type"`     // drop_columns, rename_fields, mask, filter, debezium
-	Columns  []string          `mapstructure:"columns"`  // for drop_columns
-	Mapping  map[string]string `mapstructure:"mapping"`  // for rename_fields
-	Fields   []MaskFieldSpec   `mapstructure:"fields"`   // for mask
-	Filter   FilterSpec        `mapstructure:"filter"`   // for filter
-	Debezium DebeziumSpec      `mapstructure:"debezium"` // for debezium
+	Type        string            `mapstructure:"type"`        // drop_columns, rename_fields, mask, filter, debezium, cloudevents
+	Columns     []string          `mapstructure:"columns"`     // for drop_columns
+	Mapping     map[string]string `mapstructure:"mapping"`     // for rename_fields
+	Fields      []MaskFieldSpec   `mapstructure:"fields"`      // for mask
+	Filter      FilterSpec        `mapstructure:"filter"`      // for filter
+	Debezium    DebeziumSpec      `mapstructure:"debezium"`    // for debezium
+	CloudEvents CloudEventsSpec   `mapstructure:"cloudevents"` // for cloudevents
+}
+
+type CloudEventsSpec struct {
+	Source     string `mapstructure:"source"`
+	TypePrefix string `mapstructure:"type_prefix"`
 }
 
 type DebeziumSpec struct {

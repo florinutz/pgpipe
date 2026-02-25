@@ -97,6 +97,71 @@ func TestScenario_Transform(t *testing.T) {
 		}
 	})
 
+	t.Run("cloudevents envelope", func(t *testing.T) {
+		logger := testLogger()
+		lc := newLineCapture()
+
+		det := listennotify.New(connStr, []string{channel}, 0, 0, logger)
+		p := pgcdc.NewPipeline(det,
+			pgcdc.WithBusBuffer(64),
+			pgcdc.WithLogger(logger),
+			pgcdc.WithAdapter(stdout.New(lc, logger)),
+			pgcdc.WithTransform(transform.CloudEvents()),
+		)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		g, gCtx := errgroup.WithContext(ctx)
+		g.Go(func() error { return p.Run(gCtx) })
+		t.Cleanup(func() {
+			cancel()
+			_ = g.Wait()
+		})
+
+		time.Sleep(1 * time.Second)
+
+		sendNotify(t, connStr, channel, `{"id":1,"name":"Alice"}`)
+
+		line := lc.waitLine(t, 5*time.Second)
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("unmarshal event: %v", err)
+		}
+
+		payload, ok := ev["payload"].(map[string]any)
+		if !ok {
+			t.Fatal("payload is not a map")
+		}
+
+		// Verify CloudEvents envelope fields.
+		if payload["specversion"] != "1.0" {
+			t.Errorf("specversion = %v, want 1.0", payload["specversion"])
+		}
+		if payload["source"] != "/pgcdc" {
+			t.Errorf("source = %v, want /pgcdc", payload["source"])
+		}
+		if payload["subject"] != channel {
+			t.Errorf("subject = %v, want %s", payload["subject"], channel)
+		}
+		if payload["datacontenttype"] != "application/json" {
+			t.Errorf("datacontenttype = %v, want application/json", payload["datacontenttype"])
+		}
+
+		// type should contain the operation (LISTEN/NOTIFY events have empty operation).
+		ceType, _ := payload["type"].(string)
+		if ceType == "" {
+			t.Error("type should not be empty")
+		}
+
+		// data should contain the original payload.
+		data, ok := payload["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("data is not a map: %T", payload["data"])
+		}
+		if data["name"] != "Alice" {
+			t.Errorf("data.name = %v, want Alice", data["name"])
+		}
+	})
+
 	t.Run("filter drops non-matching events", func(t *testing.T) {
 		// Pipeline with content-based filter: only pass events where payload
 		// field "status" equals "published".

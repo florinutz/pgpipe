@@ -216,6 +216,9 @@ func init() {
 	f.Bool("debezium-envelope", false, "global: rewrite payloads into Debezium-compatible envelope format")
 	f.String("debezium-connector-name", "pgcdc", "Debezium source.name field (requires --debezium-envelope)")
 	f.String("debezium-database", "", "Debezium source.db field (requires --debezium-envelope)")
+	f.Bool("cloudevents-envelope", false, "global: rewrite payloads into CloudEvents structured-mode JSON")
+	f.String("cloudevents-source", "/pgcdc", "CloudEvents source URI-reference (requires --cloudevents-envelope)")
+	f.String("cloudevents-type-prefix", "io.pgcdc.change", "CloudEvents type prefix (requires --cloudevents-envelope)")
 
 	// Backpressure flags (read directly, not viper-bound).
 	f.Bool("backpressure", false, "enable source-aware backpressure (requires --detector wal and --persistent-slot)")

@@ -34,6 +34,16 @@ func buildCLITransforms(cmd *cobra.Command) []transform.TransformFunc {
 		}
 		fns = append(fns, transform.Debezium(dopts...))
 	}
+	if ok, _ := cmd.Flags().GetBool("cloudevents-envelope"); ok {
+		var copts []transform.CloudEventsOption
+		if src, _ := cmd.Flags().GetString("cloudevents-source"); src != "" && src != "/pgcdc" {
+			copts = append(copts, transform.WithSource(src))
+		}
+		if tp, _ := cmd.Flags().GetString("cloudevents-type-prefix"); tp != "" && tp != "io.pgcdc.change" {
+			copts = append(copts, transform.WithTypePrefix(tp))
+		}
+		fns = append(fns, transform.CloudEvents(copts...))
+	}
 	return fns
 }
 
@@ -136,6 +146,15 @@ func specToTransform(spec config.TransformSpec) transform.TransformFunc {
 			dopts = append(dopts, transform.WithDatabase(spec.Debezium.Database))
 		}
 		return transform.Debezium(dopts...)
+	case "cloudevents":
+		var copts []transform.CloudEventsOption
+		if spec.CloudEvents.Source != "" {
+			copts = append(copts, transform.WithSource(spec.CloudEvents.Source))
+		}
+		if spec.CloudEvents.TypePrefix != "" {
+			copts = append(copts, transform.WithTypePrefix(spec.CloudEvents.TypePrefix))
+		}
+		return transform.CloudEvents(copts...)
 	default:
 		return nil
 	}
