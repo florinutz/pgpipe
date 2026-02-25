@@ -51,3 +51,20 @@ pgcdc listen --detector wal --publication pgcdc_all \
 Keys are constructed as `<prefix><id_column_value>`:
 - `--redis-key-prefix orders:` + row `id=42` = key `orders:42`
 - `--redis-id-column` controls which row field to use (default: `id`)
+
+## TOAST Columns in Sync Mode
+
+PostgreSQL stores large values (>2KB) out-of-line via TOAST. With `REPLICA IDENTITY DEFAULT`, UPDATE events for unchanged TOAST columns carry no data. In sync mode, pgcdc handles this automatically:
+
+- If the WAL detector has `--toast-cache` enabled, TOAST columns are resolved before reaching the adapter — no special handling needed.
+- Without the cache, the redis adapter performs `GET` → merge → `SET` when `_unchanged_toast_columns` is present, so existing Redis values are not overwritten with null.
+
+For write-heavy tables with large text columns, the cache eliminates the extra `GET` round-trip:
+
+```bash
+pgcdc listen --detector wal --publication pgcdc_orders \
+  --toast-cache \
+  -a redis --redis-url redis://localhost:6379 \
+  --redis-mode sync --redis-key-prefix orders: \
+  --db postgres://...
+```

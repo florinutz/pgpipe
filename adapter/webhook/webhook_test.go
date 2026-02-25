@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/florinutz/pgcdc/adapter/adaptertest"
 	"github.com/florinutz/pgcdc/adapter/webhook"
 	"github.com/florinutz/pgcdc/event"
 )
@@ -30,6 +31,17 @@ func newTestEvent() event.Event {
 		Source:    "test",
 		CreatedAt: time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC),
 	}
+}
+
+func TestWebhookAdapter_Contract(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	adaptertest.RunContractTests(t, "webhook", func(ctx context.Context, ch <-chan event.Event) error {
+		return webhook.New(srv.URL, nil, "", 1, 0, 0, 0, newTestLogger()).Start(ctx, ch)
+	})
 }
 
 func TestHMACSigning(t *testing.T) {

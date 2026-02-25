@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/florinutz/pgcdc/tracing"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -100,7 +101,7 @@ func setupLogger() error {
 		return fmt.Errorf("unknown log format: %q (expected text, json)", format)
 	}
 
-	slog.SetDefault(slog.New(handler))
+	slog.SetDefault(slog.New(tracing.NewTracingHandler(handler)))
 	return nil
 }
 

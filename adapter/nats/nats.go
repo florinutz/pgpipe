@@ -21,6 +21,7 @@ import (
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 )
 
 const adapterName = "nats"
@@ -224,7 +225,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 					span.End()
 				}
 				// Do NOT ack: return error to trigger reconnect (event is lost — pre-existing limitation).
-				return fmt.Errorf("publish event %s: %w", ev.ID, err)
+				return pgcdcerr.WrapEvent(err, adapterName, ev)
 			}
 
 			if span != nil {

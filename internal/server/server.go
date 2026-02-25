@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"net/http/pprof"
 	"time"
 
 	"github.com/florinutz/pgcdc/adapter/sse"
@@ -32,6 +33,19 @@ func New(sseBroker *sse.Broker, wsBroker *ws.Broker, corsOrigins []string, readT
 	}
 
 	r.Handle("/metrics", promhttp.Handler())
+
+	// Runtime profiling endpoints.
+	r.HandleFunc("/debug/pprof/", pprof.Index)
+	r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	r.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	r.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	r.Handle("/debug/pprof/block", pprof.Handler("block"))
+	r.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	r.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
 
 	if sseBroker != nil {
 		r.Get("/events", sseBroker.ServeHTTP)
@@ -70,6 +84,20 @@ func NewMetricsServer(checker *health.Checker) *http.Server {
 		r.Get("/healthz", checker.ServeHTTP)
 	}
 	r.Handle("/metrics", promhttp.Handler())
+
+	// Runtime profiling endpoints.
+	r.HandleFunc("/debug/pprof/", pprof.Index)
+	r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	r.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	r.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	r.Handle("/debug/pprof/block", pprof.Handler("block"))
+	r.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	r.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+
 	return &http.Server{
 		Handler:      r,
 		ReadTimeout:  5 * time.Second,
