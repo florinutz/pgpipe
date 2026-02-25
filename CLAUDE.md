@@ -71,10 +71,14 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **Observability**: Prometheus metrics exposed at `/metrics`. Rich health check at `/healthz` returns per-component status (200 when all up, 503 when any down). Standalone metrics server via `--metrics-addr`.
 - **Embedding adapter**: `--adapter embedding` with `--embedding-api-url`, `--embedding-columns`, `--embedding-api-key`. Calls any OpenAI-compatible endpoint, UPSERTs vector into pgvector table. INSERT/UPDATE → embed+upsert, DELETE → delete vector. Zero new deps — vectors stored as strings with `::vector` cast.
 - **Incremental snapshots**: `--incremental-snapshot` enables chunk-based `SELECT ... WHERE pk > ? LIMIT N` snapshots running alongside live WAL streaming. Signal-table triggered (`pgcdc_signals`), progress persisted to `pgcdc_snapshot_progress`, crash-resumable. Emits `SNAPSHOT_STARTED`, `SNAPSHOT` (row), and `SNAPSHOT_COMPLETED` events on `pgcdc:_snapshot`. `--snapshot-chunk-size`, `--snapshot-chunk-delay`, `--snapshot-progress-db`.
-- **Transform pipeline**: `--drop-columns col1,col2` and `--filter-operations INSERT,UPDATE` as CLI shortcuts. Full config via `transforms.global` and `transforms.adapter.<name>` in YAML. Built-in types: `drop_columns`, `rename_fields`, `mask` (zero/hash/redact modes), `filter` (by field value or operation), `debezium` (rewrites payload into Debezium envelope with before/after/op/source/transaction blocks — `--debezium-envelope`, `--debezium-connector-name`, `--debezium-database`). Applied per-adapter or globally; dropped events increment `pgcdc_transform_dropped_total`, errors increment `pgcdc_transform_errors_total`.
+- **Transform pipeline**: `--drop-columns col1,col2` and `--filter-operations INSERT,UPDATE,TRUNCATE` as CLI shortcuts. Full config via `transforms.global` and `transforms.adapter.<name>` in YAML. Built-in types: `drop_columns`, `rename_fields`, `mask` (zero/hash/redact modes), `filter` (by field value or operation), `debezium` (rewrites payload into Debezium envelope with before/after/op/source/transaction blocks — `--debezium-envelope`, `--debezium-connector-name`, `--debezium-database`), `cloudevents` (rewrites payload into CloudEvents v1.0 structured-mode JSON with pgcdc extension attributes — configurable `source` and `type_prefix` via YAML). Applied per-adapter or globally; dropped events increment `pgcdc_transform_dropped_total`, errors increment `pgcdc_transform_errors_total`.
 - **Cooperative checkpointing**: `--cooperative-checkpoint` (requires `--persistent-slot` + `--detector wal`). Adapters call `AckFunc` after delivery; checkpoint only advances to `min(all adapter ack positions)`. Non-`Acknowledger` adapters are auto-acked on channel send. Metrics: `pgcdc_ack_position{adapter}`, `pgcdc_cooperative_checkpoint_lsn`.
 - **Wasm plugin system**: Extism-based (pure Go, no CGo) plugin system for 4 extension points: transforms, adapters, DLQ backends, checkpoint stores. Plugins compiled to `.wasm` from any Extism PDK language (Rust, Go, Python, TypeScript). Zero overhead when no plugins configured. JSON serialization (protobuf opt-in). Host functions: `pgcdc_log`, `pgcdc_metric_inc`, `pgcdc_http_request`. Config via `plugins:` YAML block or `--plugin-transform`, `--plugin-adapter`, `--dlq plugin`, `--checkpoint-plugin` CLI flags. Metrics: `pgcdc_plugin_calls_total`, `pgcdc_plugin_duration_seconds`, `pgcdc_plugin_errors_total`.
-- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`, `EmbeddingDeliveryError`, `NatsPublishError`, `OutboxProcessError`, `IcebergFlushError`, `S3UploadError`, `IncrementalSnapshotError`, `PluginError`, `MongoDBChangeStreamError`) for `errors.Is`/`errors.As` matching.
+- **Encoding + Schema Registry**: `--kafka-encoding avro|protobuf|json` and `--nats-encoding avro|protobuf|json` with optional Confluent Schema Registry (`--schema-registry-url`, `--schema-registry-username`, `--schema-registry-password`). `encoding/` package: Avro (hamba/avro), Protobuf, JSON encoders. `encoding/registry/` package: Schema Registry HTTP client with wire format (magic byte + schema ID prefix).
+- **OpenTelemetry tracing**: `--otel-exporter none|stdout|otlp`, `--otel-endpoint`, `--otel-sample-ratio`. OTLP gRPC exporter for distributed tracing across the pipeline. `tracing/` package: setup, shutdown, span creation. `tracing/carrier.go`: Kafka header carrier for trace context propagation.
+- **DLQ management CLI**: `pgcdc dlq list|replay|purge` commands for inspecting, replaying, and purging dead letter queue records. Filter by adapter, time range, ID. Replay supports `--dry-run` and adapter-specific overrides (`--webhook-url`, `--kafka-brokers`). `cmd/dlq.go` + `cmd/dlq_replay_kafka.go`.
+- **TRUNCATE support**: WAL detector emits `TRUNCATE` operation type alongside INSERT/UPDATE/DELETE.
+- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`, `EmbeddingDeliveryError`, `NatsPublishError`, `OutboxProcessError`, `IcebergFlushError`, `S3UploadError`, `IncrementalSnapshotError`, `PluginError`, `MongoDBChangeStreamError`, `MySQLReplicationError`, `SchemaRegistryError`) for `errors.Is`/`errors.As` matching.
 
 ## Code Conventions
 
@@ -129,7 +133,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 
 ## Dependencies
 
-Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `twmb/franz-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `extism/go-sdk` (Wasm plugin runtime), `go-mysql-org/go-mysql` (MySQL binlog replication), `go-sql-driver/mysql` (MySQL driver for schema queries), `go.mongodb.org/mongo-driver/v2` (MongoDB Change Streams detector), `testcontainers-go` (test only).
+Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `twmb/franz-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `parquet-go/parquet-go` (Parquet writer for S3/Iceberg), `hamba/avro/v2` (Avro encoding), `go.opentelemetry.io/otel` (OpenTelemetry tracing), `extism/go-sdk` (Wasm plugin runtime), `go-mysql-org/go-mysql` (MySQL binlog replication), `go-sql-driver/mysql` (MySQL driver for schema queries), `go.mongodb.org/mongo-driver/v2` (MongoDB Change Streams detector), `testcontainers-go` (test only).
 
 ## Testing
 
@@ -195,7 +199,7 @@ Each scenario file follows this pattern:
 
 ### Max scenario count
 
-Target: ~20-30 scenarios for a project this size. If approaching 30, consolidate related scenarios before adding new ones.
+Target: keep scenarios focused and non-overlapping. Currently 38 scenarios — consolidate related ones before adding new ones.
 
 ## Code Organization
 
@@ -218,10 +222,11 @@ adapter/        Output adapter interface + implementations
   redis/        Redis cache invalidation / sync
   grpc/         gRPC streaming server
   s3/           S3-compatible object storage (JSON Lines/Parquet)
+  iceberg/      Apache Iceberg table writes (Hadoop catalog, Parquet)
 ack/            Cooperative checkpoint LSN tracker
 backpressure/   Source-aware WAL lag backpressure (throttle/pause/shed)
 bus/            Event fan-out (fast or reliable mode)
-transform/      Event transform pipeline (drop, rename, mask, filter)
+transform/      Event transform pipeline (drop, rename, mask, filter, debezium, cloudevents)
 snapshot/       Table snapshot (COPY-based row export + incremental chunk-based)
 detector/       Change detection interface + implementations
   listennotify/ PostgreSQL LISTEN/NOTIFY
@@ -234,6 +239,9 @@ event/          Event model
 health/         Component health checker
 metrics/        Prometheus metrics definitions
 dlq/            Dead letter queue (stderr + PG table backends)
+encoding/       Event encoding (Avro, Protobuf, JSON) + Schema Registry client
+  registry/     Confluent Schema Registry HTTP client + wire format
+tracing/        OpenTelemetry tracing setup + Kafka carrier
 plugin/         Wasm plugin system
   wasm/          Extism runtime, transforms, adapters, DLQ, checkpoint
   proto/         Protobuf event definition (opt-in encoding for plugins)
@@ -257,12 +265,12 @@ testutil/       Test utilities
 - `bus/bus.go` — Fan-out with configurable fast (drop) or reliable (block) mode
 - `ack/tracker.go` — Cooperative checkpoint LSN tracker (min across all adapters)
 - `backpressure/backpressure.go` — Source-aware backpressure controller: zone transitions (green/yellow/red), proportional throttle, pause/resume, adapter shedding by priority
-- `transform/transform.go` — TransformFunc interface, Chain, ErrDropEvent; `drop_columns.go`, `rename_fields.go`, `mask.go`, `filter.go`, `debezium.go` for built-in transforms
+- `transform/transform.go` — TransformFunc interface, Chain, ErrDropEvent; `drop_columns.go`, `rename_fields.go`, `mask.go`, `filter.go`, `debezium.go`, `cloudevents.go` for built-in transforms
 - `internal/config/config.go` — All config structs + defaults (CLI-only)
 - `event/event.go` — Event model (UUIDv7, JSON payload, LSN for WAL events)
 - `health/health.go` — Component health checker
 - `metrics/metrics.go` — Prometheus metric definitions
-- `pgcdcerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError, EmbeddingDeliveryError, NatsPublishError, OutboxProcessError, IcebergFlushError, IncrementalSnapshotError, MongoDBChangeStreamError)
+- `pgcdcerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError, EmbeddingDeliveryError, NatsPublishError, OutboxProcessError, IcebergFlushError, IncrementalSnapshotError, MongoDBChangeStreamError, MySQLReplicationError, SchemaRegistryError)
 - `adapter/embedding/embedding.go` — Embedding adapter: OpenAI-compatible API + pgvector UPSERT/DELETE
 - `adapter/nats/nats.go` — NATS JetStream adapter: publish with dedup + auto-stream creation
 - `adapter/kafka/kafka.go` — Kafka adapter: publish with RequireAll acks, SASL/TLS, DLQ for terminal errors
@@ -272,6 +280,11 @@ testutil/       Test utilities
 - `adapter/s3/s3.go` — S3 adapter: buffered flush to S3-compatible stores, Hive-partitioned keys
 - `adapter/s3/writer.go` — S3 format writers: JSON Lines + Parquet (Snappy)
 - `dlq/dlq.go` — DLQ interface + StderrDLQ + PGTableDLQ + NopDLQ
+- `cmd/dlq.go` — DLQ management CLI: list, replay, purge commands
+- `encoding/encoder.go` — Encoder interface + Avro/Protobuf/JSON implementations
+- `encoding/registry/client.go` — Confluent Schema Registry HTTP client
+- `tracing/tracing.go` — OpenTelemetry tracing setup (OTLP gRPC, stdout, noop exporters)
+- `tracing/carrier.go` — Kafka header carrier for OTel trace context propagation
 - `detector/outbox/outbox.go` — Outbox detector: poll-based with FOR UPDATE SKIP LOCKED
 - `detector/mysql/mysql.go` — MySQL binlog detector: BinlogSyncer-based CDC with reconnect loop
 - `detector/mysql/position.go` — MySQL binlog position ↔ uint64 encoding for checkpoint compatibility

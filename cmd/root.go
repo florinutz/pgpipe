@@ -15,10 +15,10 @@ var cfgFile string
 
 var rootCmd = &cobra.Command{
 	Use:   "pgcdc",
-	Short: "Stream PostgreSQL changes to webhooks, SSE, and stdout",
-	Long: `pgcdc listens for PostgreSQL LISTEN/NOTIFY events and fans them out
-to one or more adapters: stdout (JSON lines), webhook (HTTP POST), or
-SSE (Server-Sent Events).`,
+	Short: "Stream database changes to webhooks, SSE, stdout, and more",
+	Long: `pgcdc captures change events from PostgreSQL (LISTEN/NOTIFY, WAL, outbox),
+MySQL (binlog), or MongoDB (Change Streams) and fans them out to one or more
+adapters: stdout, webhook, SSE, WebSocket, gRPC, file, NATS, Kafka, and others.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		return setupLogger()
 	},
