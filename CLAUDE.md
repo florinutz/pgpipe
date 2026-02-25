@@ -60,6 +60,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **Event routing**: `--route adapter=channel1,channel2`. Bus-level filtering before fan-out. Adapters without routes receive all events.
 - **Outbox detector**: `--detector outbox` polls a transactional outbox table using `SELECT ... FOR UPDATE SKIP LOCKED` for concurrency-safe processing. Configurable DELETE or `processed_at` update cleanup.
 - **Shutdown**: Signal cancels root context. Bus closes subscriber channels. HTTP server gets `shutdown_timeout` (default 5s) `context.WithTimeout` for graceful drain.
+- **SIGHUP config reload**: `kill -HUP <pid>` re-reads the YAML config file and atomically swaps `transforms:` and `routes:` sections for all running adapters with zero event loss. CLI flags, plugin transforms, adapters, detectors, and bus mode remain immutable. Implementation: `sync/atomic.Pointer[wrapperConfig]` per adapter; the wrapper goroutine loads from this pointer on every event. `Pipeline.Reload(ReloadConfig)` rebuilds and stores atomically. Metrics: `pgcdc_config_reloads_total`, `pgcdc_config_reload_errors_total`. YAML `routes:` section maps adapter names to channel lists (CLI `--route` wins for same adapter name).
 - **Wiring**: `pgcdc.go` provides the reusable `Pipeline` type (detector + bus + adapters). `cmd/listen.go` adds CLI-specific HTTP servers on top.
 - **Observability**: Prometheus metrics exposed at `/metrics`. Rich health check at `/healthz` returns per-component status (200 when all up, 503 when any down). Standalone metrics server via `--metrics-addr`.
 - **Embedding adapter**: `--adapter embedding` with `--embedding-api-url`, `--embedding-columns`, `--embedding-api-key`. Calls any OpenAI-compatible endpoint, UPSERTs vector into pgvector table. INSERT/UPDATE → embed+upsert, DELETE → delete vector. Zero new deps — vectors stored as strings with `::vector` cast.
@@ -238,7 +239,8 @@ testutil/       Test utilities
 ## Key Files
 
 - `pgcdc.go` — Pipeline type, options, Run/RunSnapshot methods (library entry point)
-- `cmd/listen.go` — CLI wiring (uses Pipeline + CLI-specific HTTP servers)
+- `cmd/listen.go` — CLI wiring (uses Pipeline + CLI-specific HTTP servers, SIGHUP handler)
+- `cmd/reload.go` — SIGHUP reload helpers (CLI/YAML transform extraction, route merging, specToTransform)
 - `cmd/snapshot.go` — Snapshot CLI subcommand
 - `snapshot/snapshot.go` — Table snapshot using REPEATABLE READ + SELECT *
 - `adapter/adapter.go` — Adapter interface

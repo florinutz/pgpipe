@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
@@ -46,6 +47,23 @@ type Traceable interface {
 	SetTracer(t trace.Tracer)
 }
 
+// wrapperConfig bundles the transform chain and route filter for a single adapter.
+// Stored behind an atomic.Pointer so the wrapSubscription goroutine always sees
+// a consistent pair without a mutex on the hot path.
+type wrapperConfig struct {
+	transformFn transform.TransformFunc
+	routeFilter bus.FilterFunc
+}
+
+// ReloadConfig carries the new transforms and routes for a hot-reload.
+// CLI-flag transforms and plugin transforms should be included by the caller —
+// the Pipeline has no knowledge of their origin.
+type ReloadConfig struct {
+	Transforms        []transform.TransformFunc            // global transforms (CLI + plugin + YAML)
+	AdapterTransforms map[string][]transform.TransformFunc // per-adapter transforms (plugin + YAML)
+	Routes            map[string][]string                  // adapter -> allowed channels
+}
+
 // Pipeline orchestrates a detector, bus, and set of adapters into a running
 // event pipeline. It is the primary entry point for using pgcdc as a library.
 type Pipeline struct {
@@ -70,6 +88,9 @@ type Pipeline struct {
 
 	// Backpressure controller (nil when disabled).
 	backpressureCtrl *backpressure.Controller
+
+	// Hot-reload: atomic wrapper configs per adapter (name -> pointer).
+	wrapperConfigs map[string]*atomic.Pointer[wrapperConfig]
 
 	// OpenTelemetry tracer provider (noop when not configured).
 	tracerProvider trace.TracerProvider
@@ -248,6 +269,16 @@ func NewPipeline(det detector.Detector, opts ...Option) *Pipeline {
 		}
 	}
 
+	// Pre-populate wrapperConfigs for all adapters. The map is immutable after
+	// NewPipeline returns: subscribeAdapter only stores into existing pointers,
+	// and Reload only iterates existing entries. This prevents a data race
+	// between Run (which calls subscribeAdapter) and Reload.
+	p.wrapperConfigs = make(map[string]*atomic.Pointer[wrapperConfig], len(p.adapters))
+	for _, a := range p.adapters {
+		cfgPtr := &atomic.Pointer[wrapperConfig]{}
+		cfgPtr.Store(&wrapperConfig{}) // empty initial config; subscribeAdapter will overwrite
+		p.wrapperConfigs[a.Name()] = cfgPtr
+	}
 	p.bus = bus.New(p.busBuffer, p.logger)
 	p.bus.SetMode(p.busMode)
 	return p
@@ -361,42 +392,27 @@ func channelFilter(channels []string) bus.FilterFunc {
 	}
 }
 
-// subscribeAdapter creates a bus subscription for an adapter, applying a route
-// filter if one has been configured for that adapter name. If transforms are
-// configured (global or per-adapter), the subscription channel is wrapped with
-// a transform goroutine. When cooperative checkpointing is active, route
-// filtering is moved to the wrapper so filtered events can be auto-acked.
+// subscribeAdapter creates a bus subscription for an adapter. All route
+// filtering is done in the wrapper goroutine (not at bus level) so that
+// Reload() can swap routes atomically. The wrapper is always started to
+// support hot-reload even when no transforms or routes are initially configured.
 func (p *Pipeline) subscribeAdapter(name string) (<-chan event.Event, error) {
-	var ch <-chan event.Event
-	var err error
-	var routeFilter bus.FilterFunc
-
-	channels, hasRoute := p.routes[name]
-	if hasRoute && len(channels) > 0 {
-		if p.ackTracker != nil {
-			// Cooperative checkpoint active: move filter to wrapper so filtered
-			// events can be auto-acked before being dropped.
-			ch, err = p.bus.Subscribe(name)
-			routeFilter = channelFilter(channels)
-		} else {
-			// No cooperative checkpoint: filter at bus level (efficient).
-			ch, err = p.bus.SubscribeWithFilter(name, channelFilter(channels))
-		}
-	} else {
-		ch, err = p.bus.Subscribe(name)
-	}
+	// Always plain subscribe — route filtering is in the wrapper.
+	ch, err := p.bus.Subscribe(name)
 	if err != nil {
 		return nil, err
 	}
 
-	fn := p.buildTransformChain(name)
-	autoAck := p.autoAckAdapters[name]
-
-	if fn == nil && routeFilter == nil && !autoAck && p.backpressureCtrl == nil {
-		return ch, nil
+	// Build initial wrapperConfig and store into the pre-allocated pointer.
+	wcfg := &wrapperConfig{
+		transformFn: p.buildTransformChain(name),
+		routeFilter: channelFilter(p.routes[name]),
 	}
+	cfgPtr := p.wrapperConfigs[name]
+	cfgPtr.Store(wcfg)
 
-	return p.wrapSubscription(name, ch, routeFilter, fn, autoAck), nil
+	autoAck := p.autoAckAdapters[name]
+	return p.wrapSubscription(name, ch, cfgPtr, autoAck), nil
 }
 
 // buildTransformChain returns a composed TransformFunc for the named adapter by
@@ -409,21 +425,23 @@ func (p *Pipeline) buildTransformChain(name string) transform.TransformFunc {
 	return transform.Chain(fns...)
 }
 
-// wrapSubscription spawns a goroutine that reads from inCh, applies optional
-// route filtering (auto-acking filtered events), applies an optional transform
-// chain (auto-acking dropped/errored events), and writes to outCh. When
-// autoAck is true, events forwarded to outCh are immediately acked (for
-// non-Acknowledger adapters in cooperative checkpoint mode).
-func (p *Pipeline) wrapSubscription(name string, inCh <-chan event.Event, routeFilter bus.FilterFunc, fn transform.TransformFunc, autoAck bool) <-chan event.Event {
+// wrapSubscription spawns a goroutine that reads from inCh, loads the current
+// wrapperConfig atomically on each event, applies route filtering and transforms,
+// and writes surviving events to outCh. The atomic pointer allows Reload() to
+// swap transforms and routes with zero event loss.
+func (p *Pipeline) wrapSubscription(name string, inCh <-chan event.Event, cfgPtr *atomic.Pointer[wrapperConfig], autoAck bool) <-chan event.Event {
 	out := make(chan event.Event, cap(inCh))
 	go func() {
 		defer close(out)
 		for ev := range inCh {
+			// Load the current config atomically.
+			wcfg := cfgPtr.Load()
+
 			// Save the original LSN before transforms may alter it.
 			origLSN := ev.LSN
 
 			// Route filter: auto-ack filtered (dropped) events.
-			if routeFilter != nil && !routeFilter(ev) {
+			if wcfg.routeFilter != nil && !wcfg.routeFilter(ev) {
 				if p.ackTracker != nil && origLSN > 0 {
 					p.ackTracker.Ack(name, origLSN)
 				}
@@ -440,8 +458,8 @@ func (p *Pipeline) wrapSubscription(name string, inCh <-chan event.Event, routeF
 			}
 
 			// Transform chain: auto-ack dropped/errored events.
-			if fn != nil {
-				result, err := fn(ev)
+			if wcfg.transformFn != nil {
+				result, err := wcfg.transformFn(ev)
 				if err != nil {
 					if errors.Is(err, transform.ErrDropEvent) {
 						metrics.TransformDropped.WithLabelValues(name).Inc()
@@ -470,6 +488,34 @@ func (p *Pipeline) wrapSubscription(name string, inCh <-chan event.Event, routeF
 		}
 	}()
 	return out
+}
+
+// Reload atomically swaps the transform chains and route filters for all
+// running adapters. It is safe to call from any goroutine (e.g. a SIGHUP
+// handler). Unknown adapter names in the config are silently ignored.
+func (p *Pipeline) Reload(cfg ReloadConfig) error {
+	reloaded := 0
+	for name, cfgPtr := range p.wrapperConfigs {
+		// Build per-adapter transform chain: global + adapter-specific.
+		fns := make([]transform.TransformFunc, 0, len(cfg.Transforms)+len(cfg.AdapterTransforms[name]))
+		fns = append(fns, cfg.Transforms...)
+		fns = append(fns, cfg.AdapterTransforms[name]...)
+
+		wcfg := &wrapperConfig{
+			transformFn: transform.Chain(fns...),
+			routeFilter: channelFilter(cfg.Routes[name]),
+		}
+		cfgPtr.Store(wcfg)
+		reloaded++
+	}
+
+	metrics.ConfigReloads.Inc()
+	p.logger.Info("pipeline config reloaded",
+		slog.Int("adapters", reloaded),
+		slog.Int("global_transforms", len(cfg.Transforms)),
+		slog.Int("routes", len(cfg.Routes)),
+	)
+	return nil
 }
 
 // NewSnapshotPipeline creates a Pipeline that uses a snapshot as the event

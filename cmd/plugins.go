@@ -13,6 +13,7 @@ import (
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/internal/config"
 	wasmplug "github.com/florinutz/pgcdc/plugin/wasm"
+	"github.com/florinutz/pgcdc/transform"
 	"github.com/spf13/cobra"
 )
 
@@ -103,14 +104,17 @@ func wirePluginAdapters(ctx context.Context, rt any, cmd *cobra.Command, cfg con
 	return opts, func() {}, nil
 }
 
-func buildPluginTransformOpts(ctx context.Context, rt any, cmd *cobra.Command, cfg config.Config, logger *slog.Logger) ([]pgcdc.Option, func()) {
+func buildPluginTransformOpts(ctx context.Context, rt any, cmd *cobra.Command, cfg config.Config, logger *slog.Logger) ([]pgcdc.Option, pluginTransforms, func()) {
 	r, ok := rt.(*wasmplug.Runtime)
 	if !ok || r == nil {
-		return nil, func() {}
+		return nil, pluginTransforms{}, func() {}
 	}
 
 	var opts []pgcdc.Option
 	var wasmTransforms []*wasmplug.WasmTransform
+	pt := pluginTransforms{
+		adapter: make(map[string][]transform.TransformFunc),
+	}
 
 	// CLI flag plugin transforms.
 	pluginTransformPaths, _ := cmd.Flags().GetStringSlice("plugin-transform")
@@ -129,6 +133,7 @@ func buildPluginTransformOpts(ctx context.Context, rt any, cmd *cobra.Command, c
 		}
 		wasmTransforms = append(wasmTransforms, wt)
 		opts = append(opts, pgcdc.WithTransform(wt.TransformFunc()))
+		pt.global = append(pt.global, wt.TransformFunc())
 	}
 
 	// Config file: plugin transforms.
@@ -147,15 +152,19 @@ func buildPluginTransformOpts(ctx context.Context, rt any, cmd *cobra.Command, c
 		case string:
 			if scope == "global" || scope == "" {
 				opts = append(opts, pgcdc.WithTransform(wt.TransformFunc()))
+				pt.global = append(pt.global, wt.TransformFunc())
 			}
 		case map[string]any:
 			if adapterName, ok := scope["adapter"].(string); ok && adapterName != "" {
 				opts = append(opts, pgcdc.WithAdapterTransform(adapterName, wt.TransformFunc()))
+				pt.adapter[adapterName] = append(pt.adapter[adapterName], wt.TransformFunc())
 			} else {
 				opts = append(opts, pgcdc.WithTransform(wt.TransformFunc()))
+				pt.global = append(pt.global, wt.TransformFunc())
 			}
 		default:
 			opts = append(opts, pgcdc.WithTransform(wt.TransformFunc()))
+			pt.global = append(pt.global, wt.TransformFunc())
 		}
 	}
 
@@ -165,5 +174,5 @@ func buildPluginTransformOpts(ctx context.Context, rt any, cmd *cobra.Command, c
 		}
 	}
 
-	return opts, cleanup
+	return opts, pt, cleanup
 }

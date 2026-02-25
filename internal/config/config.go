@@ -30,6 +30,7 @@ type Config struct {
 	Kafka               KafkaConfig               `mapstructure:"kafka"`
 	IncrementalSnapshot IncrementalSnapshotConfig `mapstructure:"incremental_snapshot"`
 	Transforms          TransformConfig           `mapstructure:"transforms"`
+	Routes              map[string][]string       `mapstructure:"routes"` // adapter -> channels
 	Backpressure        BackpressureConfig        `mapstructure:"backpressure"`
 	Plugins             PluginConfig              `mapstructure:"plugins"`
 	Encoding            EncodingConfig            `mapstructure:"encoding"`

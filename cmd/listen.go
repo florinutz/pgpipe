@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -38,6 +39,7 @@ import (
 	"github.com/florinutz/pgcdc/encoding/registry"
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/internal/server"
+	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/snapshot"
 	"github.com/florinutz/pgcdc/tracing"
 	"github.com/florinutz/pgcdc/transform"
@@ -642,16 +644,11 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 	opts = append(opts, pgcdc.WithDLQ(dlqInstance))
 
-	// Parse routes.
-	routeFlags, _ := cmd.Flags().GetStringSlice("route")
-	for _, r := range routeFlags {
-		parts := strings.SplitN(r, "=", 2)
-		if len(parts) != 2 || parts[1] == "" {
-			logger.Warn("ignoring malformed route (expected adapter=channel1,channel2)", "route", r)
-			continue
-		}
-		channels := strings.Split(parts[1], ",")
-		opts = append(opts, pgcdc.WithRoute(parts[0], channels...))
+	// Parse routes (CLI + YAML merged).
+	cliRoutes := buildCLIRoutes(cmd)
+	allRoutes := mergeRoutes(cliRoutes, cfg.Routes)
+	for adapterName, channels := range allRoutes {
+		opts = append(opts, pgcdc.WithRoute(adapterName, channels...))
 	}
 
 	// Auto-create FOR ALL TABLES publication when --all-tables is set.
@@ -862,16 +859,25 @@ func runListen(cmd *cobra.Command, args []string) error {
 	opts = append(opts, pluginAdapterOpts...)
 
 	// Build transform options from CLI flags and config.
-	transformOpts, transformCleanup := buildTransformOpts(cfg, cmd, ctx, wasmRT, logger)
-	opts = append(opts, transformOpts...)
+	globalTransforms, adapterTransforms := buildTransformOpts(cfg, cmd)
+	for _, fn := range globalTransforms {
+		opts = append(opts, pgcdc.WithTransform(fn))
+	}
+	for adapterName, fns := range adapterTransforms {
+		for _, fn := range fns {
+			opts = append(opts, pgcdc.WithAdapterTransform(adapterName, fn))
+		}
+	}
 	// Plugin transforms.
-	pluginTransformOpts, pluginTransformCleanup := buildPluginTransformOpts(ctx, wasmRT, cmd, cfg, logger)
+	pluginTransformOpts, pluginTfx, pluginTransformCleanup := buildPluginTransformOpts(ctx, wasmRT, cmd, cfg, logger)
 	opts = append(opts, pluginTransformOpts...)
+
+	// Capture immutable CLI transforms for SIGHUP reload.
+	immutableCLITransforms := buildCLITransforms(cmd)
 
 	// Build pipeline.
 	p := pgcdc.NewPipeline(det, opts...)
 	defer func() { _ = dlqInstance.Close() }()
-	defer transformCleanup()
 	defer pluginTransformCleanup()
 	defer closePluginRuntime(ctx, wasmRT)
 
@@ -881,6 +887,65 @@ func runListen(cmd *cobra.Command, args []string) error {
 	// Run the core pipeline (detector + bus + adapters).
 	g.Go(func() error {
 		return p.Run(gCtx)
+	})
+
+	// SIGHUP handler: reload transforms and routes from YAML config.
+	sighupCh := make(chan os.Signal, 1)
+	signal.Notify(sighupCh, syscall.SIGHUP)
+	g.Go(func() error {
+		defer signal.Stop(sighupCh)
+		for {
+			select {
+			case <-gCtx.Done():
+				return nil
+			case <-sighupCh:
+				logger.Info("SIGHUP received, reloading config")
+
+				// Re-read config file.
+				if err := viper.ReadInConfig(); err != nil {
+					logger.Error("config reload: read config file", "error", err)
+					metrics.ConfigReloadErrors.Inc()
+					continue
+				}
+				var newCfg config.Config
+				newCfg = config.Default()
+				if err := viper.Unmarshal(&newCfg); err != nil {
+					logger.Error("config reload: unmarshal config", "error", err)
+					metrics.ConfigReloadErrors.Inc()
+					continue
+				}
+
+				// Rebuild YAML transforms (reloadable portion).
+				yamlGlobal, yamlAdapter := buildYAMLTransforms(newCfg)
+
+				// Merge: CLI (immutable) + plugin (immutable) + YAML (reloaded).
+				allGlobal := make([]transform.TransformFunc, 0, len(immutableCLITransforms)+len(pluginTfx.global)+len(yamlGlobal))
+				allGlobal = append(allGlobal, immutableCLITransforms...)
+				allGlobal = append(allGlobal, pluginTfx.global...)
+				allGlobal = append(allGlobal, yamlGlobal...)
+
+				allAdapter := make(map[string][]transform.TransformFunc)
+				for k, v := range pluginTfx.adapter {
+					allAdapter[k] = append(allAdapter[k], v...)
+				}
+				for k, v := range yamlAdapter {
+					allAdapter[k] = append(allAdapter[k], v...)
+				}
+
+				// Merge routes: CLI (immutable) + YAML (reloaded).
+				reloadedRoutes := mergeRoutes(cliRoutes, newCfg.Routes)
+
+				if err := p.Reload(pgcdc.ReloadConfig{
+					Transforms:        allGlobal,
+					AdapterTransforms: allAdapter,
+					Routes:            reloadedRoutes,
+				}); err != nil {
+					logger.Error("config reload: apply", "error", err)
+					metrics.ConfigReloadErrors.Inc()
+					continue
+				}
+			}
+		}
 	})
 
 	// If SSE or WS is active, start the HTTP server with SSE/WS + metrics + health.
@@ -969,103 +1034,6 @@ func ensureAllTablesPublication(ctx context.Context, dbURL, publication string, 
 	}
 	logger.Info("created all-tables publication", "publication", publication)
 	return nil
-}
-
-// buildTransformOpts parses CLI flags and config to produce pipeline transform options.
-// Returns the options and a cleanup function. Plugin transforms are handled separately
-// by buildPluginTransformOpts.
-func buildTransformOpts(cfg config.Config, cmd *cobra.Command, _ context.Context, _ any, _ *slog.Logger) ([]pgcdc.Option, func()) {
-	var opts []pgcdc.Option
-
-	// CLI flag shortcuts → global transforms.
-	if cols, _ := cmd.Flags().GetStringSlice("drop-columns"); len(cols) > 0 {
-		opts = append(opts, pgcdc.WithTransform(transform.DropColumns(cols...)))
-	}
-	if ops, _ := cmd.Flags().GetStringSlice("filter-operations"); len(ops) > 0 {
-		opts = append(opts, pgcdc.WithTransform(transform.FilterOperation(ops...)))
-	}
-	if ok, _ := cmd.Flags().GetBool("debezium-envelope"); ok {
-		var dopts []transform.DebeziumOption
-		if name, _ := cmd.Flags().GetString("debezium-connector-name"); name != "" && name != "pgcdc" {
-			dopts = append(dopts, transform.WithConnectorName(name))
-		}
-		if db, _ := cmd.Flags().GetString("debezium-database"); db != "" {
-			dopts = append(dopts, transform.WithDatabase(db))
-		}
-		opts = append(opts, pgcdc.WithTransform(transform.Debezium(dopts...)))
-	}
-
-	// Config file: global transforms.
-	for _, spec := range cfg.Transforms.Global {
-		if fn := specToTransform(spec); fn != nil {
-			opts = append(opts, pgcdc.WithTransform(fn))
-		}
-	}
-
-	// Config file: per-adapter transforms.
-	for adapterName, specs := range cfg.Transforms.Adapter {
-		for _, spec := range specs {
-			if fn := specToTransform(spec); fn != nil {
-				opts = append(opts, pgcdc.WithAdapterTransform(adapterName, fn))
-			}
-		}
-	}
-
-	return opts, func() {}
-}
-
-// specToTransform converts a config TransformSpec into a TransformFunc.
-func specToTransform(spec config.TransformSpec) transform.TransformFunc {
-	switch spec.Type {
-	case "drop_columns":
-		if len(spec.Columns) == 0 {
-			return nil
-		}
-		return transform.DropColumns(spec.Columns...)
-	case "rename_fields":
-		if len(spec.Mapping) == 0 {
-			return nil
-		}
-		return transform.RenameFields(spec.Mapping)
-	case "mask":
-		if len(spec.Fields) == 0 {
-			return nil
-		}
-		fields := make([]transform.MaskField, len(spec.Fields))
-		for i, f := range spec.Fields {
-			fields[i] = transform.MaskField{
-				Field: f.Field,
-				Mode:  transform.MaskMode(f.Mode),
-			}
-		}
-		return transform.Mask(fields...)
-	case "filter":
-		if len(spec.Filter.Operations) > 0 {
-			return transform.FilterOperation(spec.Filter.Operations...)
-		}
-		if spec.Filter.Field != "" && len(spec.Filter.In) > 0 {
-			vals := make([]any, len(spec.Filter.In))
-			for i, v := range spec.Filter.In {
-				vals[i] = v
-			}
-			return transform.FilterFieldIn(spec.Filter.Field, vals...)
-		}
-		if spec.Filter.Field != "" && spec.Filter.Equals != "" {
-			return transform.FilterField(spec.Filter.Field, spec.Filter.Equals)
-		}
-		return nil
-	case "debezium":
-		var dopts []transform.DebeziumOption
-		if spec.Debezium.ConnectorName != "" {
-			dopts = append(dopts, transform.WithConnectorName(spec.Debezium.ConnectorName))
-		}
-		if spec.Debezium.Database != "" {
-			dopts = append(dopts, transform.WithDatabase(spec.Debezium.Database))
-		}
-		return transform.Debezium(dopts...)
-	default:
-		return nil
-	}
 }
 
 // buildEncoders creates encoders for Kafka and NATS based on config.
