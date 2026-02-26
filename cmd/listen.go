@@ -568,8 +568,10 @@ func runListen(cmd *cobra.Command, args []string) error {
 			hasS3 = true
 		case "grpc":
 			// gRPC adapter has no required config (addr has default).
+		case "view":
+			// view adapter is auto-created from views: config section.
 		default:
-			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, kafka, kafkaserver, s3, or grpc)", name)
+			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, kafka, kafkaserver, s3, grpc, or view)", name)
 		}
 	}
 	if hasWebhook && cfg.Webhook.URL == "" {
@@ -1004,6 +1006,30 @@ func runListen(cmd *cobra.Command, args []string) error {
 			opts = append(opts, pgcdc.WithAdapter(a))
 		case "s3":
 			a, aErr := makeS3Adapter(cfg, logger)
+			if aErr != nil {
+				return aErr
+			}
+			opts = append(opts, pgcdc.WithAdapter(a))
+		case "view":
+			a, aErr := makeViewAdapter(cfg, logger)
+			if aErr != nil {
+				return aErr
+			}
+			opts = append(opts, pgcdc.WithAdapter(a))
+		}
+	}
+
+	// Auto-create view adapter from YAML views: config (if not already added via --adapter view).
+	if len(cfg.Views) > 0 {
+		hasViewAdapter := false
+		for _, name := range cfg.Adapters {
+			if name == "view" {
+				hasViewAdapter = true
+				break
+			}
+		}
+		if !hasViewAdapter {
+			a, aErr := makeViewAdapter(cfg, logger)
 			if aErr != nil {
 				return aErr
 			}

@@ -337,6 +337,13 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		return p.detector.Start(gCtx, p.bus.Ingest())
 	})
 
+	// Wire Reinjector adapters (e.g. view adapter) before starting.
+	for _, a := range p.adapters {
+		if r, ok := a.(adapter.Reinjector); ok {
+			r.SetIngestChan(p.bus.Ingest())
+		}
+	}
+
 	// Subscribe and start each adapter.
 	for _, a := range p.adapters {
 		sub, err := p.subscribeAdapter(a.Name())

@@ -1,6 +1,6 @@
 # pgcdc
 
-PostgreSQL, MySQL, and MongoDB change data capture (LISTEN/NOTIFY, WAL logical replication, outbox pattern, MySQL binlog, or MongoDB Change Streams) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, gRPC, S3-compatible object storage, and a built-in Kafka protocol server (speak Kafka wire protocol directly — no Kafka cluster needed).
+PostgreSQL, MySQL, and MongoDB change data capture (LISTEN/NOTIFY, WAL logical replication, outbox pattern, MySQL binlog, or MongoDB Change Streams) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, gRPC, S3-compatible object storage, a built-in Kafka protocol server (speak Kafka wire protocol directly — no Kafka cluster needed), and streaming SQL views (tumbling window aggregation over CDC events).
 
 ## Quick Start
 
@@ -37,6 +37,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
                                         ──> Adapter (gRPC streaming)
                                         ──> Adapter (S3: JSON Lines/Parquet)
                                         ──> Adapter (embedding)  ──> DLQ
+                                        ──> Adapter (view)       ──> re-inject to bus
                                 subscriber chans (one per adapter, filtered by route)
                                       |
                               Health Checker (per-component status)
@@ -61,6 +62,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **gRPC adapter**: `--adapter grpc` starts a gRPC streaming server. Clients call `Subscribe(SubscribeRequest)` with optional channel filter. Proto at `adapter/grpc/proto/pgcdc.proto`.
 - **S3 adapter**: `--adapter s3` buffers events and periodically flushes partitioned objects (Hive-style `channel=.../year=.../month=.../day=.../`) to any S3-compatible store (AWS S3, MinIO, R2, etc.). JSON Lines (default) or Parquet format. Time+size flush triggers, atomic buffer swap, all-or-nothing upload per flush. `--s3-bucket`, `--s3-prefix`, `--s3-endpoint`, `--s3-region`, `--s3-access-key-id`, `--s3-secret-access-key`, `--s3-format`, `--s3-flush-interval`, `--s3-flush-size`, `--s3-drain-timeout`.
 - **Kafka protocol server**: `--adapter kafkaserver` starts a TCP server on `:9092` (configurable) that speaks the Kafka wire protocol. Any Kafka consumer library (librdkafka, franz-go, sarama, Java client, confluent-kafka-python) connects directly to pgcdc — no Kafka cluster needed. pgcdc channels become Kafka topics (`pgcdc:orders` → `pgcdc.orders`), events hash across N partitions (FNV-1a on key column or event ID), consumer groups with partition assignment and heartbeat session reaping. Supports all 11 API keys: ApiVersions, Metadata, FindCoordinator, JoinGroup, SyncGroup, Heartbeat, LeaveGroup, ListOffsets, Fetch (RecordBatch v2 with headers), OffsetCommit, OffsetFetch. Flexible encoding for ApiVersions v3+ (compact arrays, tagged fields). Offset persistence via `checkpoint.Store` with keys `kafka:{group}:{topic}:{partition}`. Long-poll Fetch with per-partition waiters. `--kafkaserver-addr` (default `:9092`), `--kafkaserver-partitions` (default 8), `--kafkaserver-buffer-size` (default 10000 records/partition), `--kafkaserver-session-timeout` (default 30s), `--kafkaserver-key-column` (default `id`), `--kafkaserver-checkpoint-db`.
+- **View adapter**: `--adapter view` (or auto-created from `views:` YAML config) runs streaming SQL analytics over CDC events. SQL-like queries against virtual `pgcdc_events` table with `TUMBLING WINDOW <duration>` clauses. Supports `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` with `GROUP BY` and `HAVING`. Results emitted as `VIEW_RESULT` events on `pgcdc:_view:<name>` channels, re-injected into the bus. Emit modes: `row` (one event per group) or `batch` (single event with rows array). `max_groups` caps cardinality. Loop prevention: events from `pgcdc:_view:` channels are skipped. SQL parsing via TiDB parser. `--view-query` not yet implemented; views configured via `views:` YAML section.
 - **Dead letter queue**: `--dlq stderr|pg_table|none`. Failed events captured to stderr (JSON lines) or `pgcdc_dead_letters` table. Adapters with DLQ support: webhook, embedding, kafka. (kafkaserver has no DLQ — in-memory ring buffer; consumers that fall behind get OFFSET_OUT_OF_RANGE.)
 - **Kafka adapter**: `--adapter kafka` publishes events to Kafka topics with per-event key (`event.ID`), headers (`pgcdc-channel`, `pgcdc-operation`, `pgcdc-event-id`), and `RequireAll` acks. Channel-to-topic mapping: `pgcdc:orders` → `pgcdc.orders`. `--kafka-topic` overrides with a fixed topic. SASL (plain, SCRAM-SHA-256/512) and TLS supported. Terminal Kafka errors (non-retriable) go to DLQ; connection errors trigger reconnect with backoff. `--kafka-transactional-id` enables exactly-once delivery via Kafka transactions (each event produced in its own transaction).
 - **Event routing**: `--route adapter=channel1,channel2`. Bus-level filtering before fan-out. Adapters without routes receive all events.
@@ -80,7 +82,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 - **OpenTelemetry tracing**: `--otel-exporter none|stdout|otlp`, `--otel-endpoint`, `--otel-sample-ratio`. OTLP gRPC exporter for distributed tracing across the pipeline. `tracing/` package: setup, shutdown, span creation. `tracing/carrier.go`: Kafka header carrier for trace context propagation.
 - **DLQ management CLI**: `pgcdc dlq list|replay|purge` commands for inspecting, replaying, and purging dead letter queue records. Filter by adapter, time range, ID. Replay supports `--dry-run` and adapter-specific overrides (`--webhook-url`, `--kafka-brokers`). `cmd/dlq.go` + `cmd/dlq_replay_kafka.go`.
 - **TRUNCATE support**: WAL detector emits `TRUNCATE` operation type alongside INSERT/UPDATE/DELETE.
-- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`, `EmbeddingDeliveryError`, `NatsPublishError`, `OutboxProcessError`, `IcebergFlushError`, `S3UploadError`, `IncrementalSnapshotError`, `PluginError`, `MongoDBChangeStreamError`, `MySQLReplicationError`, `SchemaRegistryError`) for `errors.Is`/`errors.As` matching.
+- **Error types**: `pgcdcerr/` provides typed errors (`ErrBusClosed`, `WebhookDeliveryError`, `DetectorDisconnectedError`, `ExecProcessError`, `EmbeddingDeliveryError`, `NatsPublishError`, `OutboxProcessError`, `IcebergFlushError`, `S3UploadError`, `IncrementalSnapshotError`, `PluginError`, `MongoDBChangeStreamError`, `MySQLReplicationError`, `SchemaRegistryError`, `KafkaServerError`, `ViewError`) for `errors.Is`/`errors.As` matching.
 
 ## Code Conventions
 
@@ -135,7 +137,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 
 ## Dependencies
 
-Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `twmb/franz-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `parquet-go/parquet-go` (Parquet writer for S3/Iceberg), `hamba/avro/v2` (Avro encoding), `go.opentelemetry.io/otel` (OpenTelemetry tracing), `extism/go-sdk` (Wasm plugin runtime), `go-mysql-org/go-mysql` (MySQL binlog replication), `go-sql-driver/mysql` (MySQL driver for schema queries), `go.mongodb.org/mongo-driver/v2` (MongoDB Change Streams detector), `testcontainers-go` (test only).
+Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter), `twmb/franz-go` (Kafka adapter), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `parquet-go/parquet-go` (Parquet writer for S3/Iceberg), `hamba/avro/v2` (Avro encoding), `go.opentelemetry.io/otel` (OpenTelemetry tracing), `extism/go-sdk` (Wasm plugin runtime), `go-mysql-org/go-mysql` (MySQL binlog replication), `go-sql-driver/mysql` (MySQL driver for schema queries), `go.mongodb.org/mongo-driver/v2` (MongoDB Change Streams detector), `pingcap/tidb/pkg/parser` (SQL parsing for view adapter), `testcontainers-go` (test only).
 
 ## Testing
 
@@ -226,6 +228,8 @@ adapter/        Output adapter interface + implementations
   s3/           S3-compatible object storage (JSON Lines/Parquet)
   iceberg/      Apache Iceberg table writes (Hadoop catalog, Parquet)
   kafkaserver/  Kafka wire protocol server (no Kafka cluster needed)
+  view/         Streaming SQL view engine adapter
+view/           Streaming SQL engine (parser, evaluator, tumbling window, aggregators)
 ack/            Cooperative checkpoint LSN tracker
 backpressure/   Source-aware WAL lag backpressure (throttle/pause/shed)
 bus/            Event fan-out (fast or reliable mode)
@@ -274,7 +278,12 @@ testutil/       Test utilities
 - `event/event.go` — Event model (UUIDv7, JSON payload, LSN for WAL events)
 - `health/health.go` — Component health checker
 - `metrics/metrics.go` — Prometheus metric definitions
-- `pgcdcerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError, EmbeddingDeliveryError, NatsPublishError, OutboxProcessError, IcebergFlushError, IncrementalSnapshotError, MongoDBChangeStreamError, MySQLReplicationError, SchemaRegistryError, KafkaServerError)
+- `pgcdcerr/errors.go` — Typed errors (ErrBusClosed, WebhookDeliveryError, DetectorDisconnectedError, ExecProcessError, EmbeddingDeliveryError, NatsPublishError, OutboxProcessError, IcebergFlushError, IncrementalSnapshotError, MongoDBChangeStreamError, MySQLReplicationError, SchemaRegistryError, KafkaServerError, ViewError)
+- `adapter/view/view.go` — View adapter: wraps view.Engine, implements adapter.Reinjector for bus re-injection
+- `view/engine.go` — View engine: manages tumbling windows, processes events, flushes results
+- `view/parser.go` — SQL parser: TiDB-based parsing of streaming SQL with TUMBLING WINDOW extension
+- `view/window.go` — Tumbling window: time-based aggregation with group-by and HAVING
+- `view/aggregate.go` — Aggregator implementations: COUNT, SUM, AVG, MIN, MAX
 - `adapter/embedding/embedding.go` — Embedding adapter: OpenAI-compatible API + pgvector UPSERT/DELETE
 - `adapter/nats/nats.go` — NATS JetStream adapter: publish with dedup + auto-stream creation
 - `adapter/kafka/kafka.go` — Kafka adapter: publish with RequireAll acks, SASL/TLS, DLQ for terminal errors

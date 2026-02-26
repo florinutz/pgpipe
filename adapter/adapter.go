@@ -30,3 +30,10 @@ type Acknowledger interface {
 type Traceable interface {
 	SetTracer(t trace.Tracer)
 }
+
+// Reinjector is implemented by adapters that produce events back into the bus
+// (e.g. the view adapter emits VIEW_RESULT events). The pipeline injects the
+// bus ingest channel before starting adapters.
+type Reinjector interface {
+	SetIngestChan(ch chan<- event.Event)
+}

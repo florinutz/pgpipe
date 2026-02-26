@@ -207,6 +207,18 @@ func (e *KafkaServerError) Unwrap() error {
 	return e.Err
 }
 
+// ViewError indicates that a view engine operation failed.
+type ViewError struct {
+	View string
+	Err  error
+}
+
+func (e *ViewError) Error() string {
+	return fmt.Sprintf("view %s: %v", e.View, e.Err)
+}
+
+func (e *ViewError) Unwrap() error { return e.Err }
+
 // PluginError indicates that a Wasm plugin call failed.
 type PluginError struct {
 	Plugin string

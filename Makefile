@@ -3,13 +3,13 @@ LDFLAGS := -s -w -X github.com/florinutz/pgcdc/cmd.Version=$(VERSION)
 
 .PHONY: build build-slim build-slim-stripped size test test-scenarios test-all lint vet fmt bench coverage docker-build docker-up docker-down clean help
 
-SLIM_TAGS := no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins
+SLIM_TAGS := no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins,no_views
 
 ## build: Compile the binary
 build:
 	go build -ldflags "$(LDFLAGS)" -o pgcdc ./cmd/pgcdc
 
-## build-slim: Binary without Kafka/gRPC/Iceberg/NATS/Redis/Wasm
+## build-slim: Binary without Kafka/gRPC/Iceberg/NATS/Redis/Wasm/Views
 build-slim:
 	go build -tags "$(SLIM_TAGS)" -ldflags "$(LDFLAGS)" -o pgcdc-slim ./cmd/pgcdc
 

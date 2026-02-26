@@ -171,6 +171,14 @@ func createToastTable(t *testing.T, connStr, table string) {
 		t.Fatalf("createToastTable: %v", err)
 	}
 
+	// Force EXTERNAL storage on description so PG externalizes without
+	// compression. Repeated characters compress too well and stay inline,
+	// defeating the TOAST unchanged-column test.
+	storage := fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN description SET STORAGE EXTERNAL`, safeTable)
+	if _, err := conn.Exec(ctx, storage); err != nil {
+		t.Fatalf("createToastTable set storage external: %v", err)
+	}
+
 	// Explicitly set REPLICA IDENTITY DEFAULT (PK only) — this is the
 	// default, but being explicit makes the test's intent clear.
 	identity := fmt.Sprintf(`ALTER TABLE %s REPLICA IDENTITY DEFAULT`, safeTable)
