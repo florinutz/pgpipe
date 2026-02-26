@@ -1,0 +1,17 @@
+apiVersion: v2
+name: pgcdc
+description: PostgreSQL Change Data Capture streaming pipeline
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - postgresql
+  - cdc
+  - change-data-capture
+  - streaming
+  - replication
+home: https://github.com/florinutz/pgcdc
+sources:
+  - https://github.com/florinutz/pgcdc
+maintainers:
+  - name: florinutz

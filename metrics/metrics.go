@@ -89,6 +89,11 @@ var (
 		Help: "Total number of tokens consumed by the embedding API.",
 	})
 
+	EmbeddingSkipped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_embedding_skipped_total",
+		Help: "Total number of embedding operations skipped due to unchanged columns.",
+	})
+
 	IcebergFlushes = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "pgcdc_iceberg_flushes_total",
 		Help: "Total number of Iceberg flush operations.",

@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type Config struct {
 	DatabaseURL         string                    `mapstructure:"database_url"`
@@ -123,6 +126,7 @@ type EmbeddingConfig struct {
 	CBResetTimeout time.Duration `mapstructure:"cb_reset_timeout"`
 	RateLimit      float64       `mapstructure:"rate_limit"`
 	RateLimitBurst int           `mapstructure:"rate_limit_burst"`
+	SkipUnchanged  bool          `mapstructure:"skip_unchanged"`
 }
 
 type IcebergConfig struct {
@@ -366,6 +370,26 @@ type EncodingConfig struct {
 	SchemaRegistryURL      string `mapstructure:"schema_registry_url"`
 	SchemaRegistryUsername string `mapstructure:"schema_registry_username"`
 	SchemaRegistryPassword string `mapstructure:"schema_registry_password"`
+}
+
+// Validate performs structural validation on the config.
+func (c Config) Validate() error {
+	if c.Bus.BufferSize <= 0 {
+		return fmt.Errorf("bus.buffer_size must be > 0, got %d", c.Bus.BufferSize)
+	}
+	if c.ShutdownTimeout <= 0 {
+		return fmt.Errorf("shutdown_timeout must be > 0")
+	}
+	adapterSet := make(map[string]bool, len(c.Adapters))
+	for _, a := range c.Adapters {
+		adapterSet[a] = true
+	}
+	for name := range c.Routes {
+		if !adapterSet[name] {
+			return fmt.Errorf("route references unknown adapter %q", name)
+		}
+	}
+	return nil
 }
 
 func Default() Config {

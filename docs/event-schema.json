@@ -1,0 +1,285 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/florinutz/pgcdc/docs/event-schema.json",
+  "title": "pgcdc Event",
+  "description": "Schema for pgcdc CDC events emitted by all detectors and adapters.",
+  "definitions": {
+    "base_event": {
+      "type": "object",
+      "required": ["id", "channel", "operation", "payload", "source", "created_at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "UUIDv7 event identifier. Monotonically increasing, embeds creation timestamp.",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "channel": {
+          "type": "string",
+          "description": "Event channel. Format: 'pgcdc:<name>' for standard channels, 'pgcdc:_txn' for transaction markers, 'pgcdc:_schema' for schema changes, 'pgcdc:_view:<name>' for view results, 'pgcdc:_snapshot' for snapshot events, 'pgcdc:<schema>.<table>' for MySQL/MongoDB.",
+          "examples": ["pgcdc:orders", "pgcdc:public.users", "pgcdc:_view:order_stats"]
+        },
+        "operation": {
+          "type": "string",
+          "description": "The type of change or event.",
+          "enum": [
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "TRUNCATE",
+            "SNAPSHOT",
+            "SNAPSHOT_STARTED",
+            "SNAPSHOT_COMPLETED",
+            "BEGIN",
+            "COMMIT",
+            "SCHEMA_CHANGE",
+            "VIEW_RESULT"
+          ]
+        },
+        "payload": {
+          "description": "Event payload. Structure depends on the source detector and any transforms applied.",
+          "oneOf": [
+            { "$ref": "#/definitions/wal_payload" },
+            { "$ref": "#/definitions/listen_notify_payload" },
+            { "$ref": "#/definitions/view_result_payload" },
+            { "$ref": "#/definitions/debezium_envelope" },
+            { "$ref": "#/definitions/cloudevents_envelope" },
+            { "type": "object", "description": "Raw payload (outbox, MySQL, MongoDB)" }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "The detector that produced this event.",
+          "enum": ["listen_notify", "wal", "outbox", "mysql", "mongodb"]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of event creation (UTC)."
+        },
+        "transaction": {
+          "$ref": "#/definitions/transaction_info"
+        }
+      },
+      "additionalProperties": false
+    },
+    "transaction_info": {
+      "type": "object",
+      "description": "PostgreSQL transaction metadata. Only present when --tx-metadata is enabled and source is 'wal'.",
+      "required": ["xid", "commit_time", "seq"],
+      "properties": {
+        "xid": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "PostgreSQL transaction ID."
+        },
+        "commit_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Transaction commit timestamp (UTC)."
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sequence number of this event within the transaction (0-based)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "wal_payload": {
+      "type": "object",
+      "description": "Standard WAL event payload for INSERT, UPDATE, DELETE operations.",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": ["INSERT", "UPDATE", "DELETE", "TRUNCATE"],
+          "description": "Operation type."
+        },
+        "schema": {
+          "type": "string",
+          "description": "PostgreSQL schema name."
+        },
+        "table": {
+          "type": "string",
+          "description": "Table name."
+        },
+        "row": {
+          "type": "object",
+          "description": "New row data (INSERT/UPDATE) or deleted row data (DELETE with REPLICA IDENTITY FULL).",
+          "additionalProperties": true
+        },
+        "old": {
+          "type": ["object", "null"],
+          "description": "Previous row data for UPDATE operations (requires REPLICA IDENTITY FULL or key columns).",
+          "additionalProperties": true
+        },
+        "columns": {
+          "type": "array",
+          "description": "Column metadata. Only present when --include-schema is enabled.",
+          "items": {
+            "type": "object",
+            "required": ["name", "type_oid", "type_name"],
+            "properties": {
+              "name": { "type": "string" },
+              "type_oid": { "type": "integer" },
+              "type_name": { "type": "string" }
+            }
+          }
+        },
+        "_unchanged_toast_columns": {
+          "type": "array",
+          "description": "List of TOAST column names whose values were unchanged and are set to null in the row. Present when --toast-cache is enabled and a cache miss occurs.",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "listen_notify_payload": {
+      "description": "LISTEN/NOTIFY payload. Can be any valid JSON value (string, object, array, etc.) depending on what the application sends via pg_notify()."
+    },
+    "view_result_payload": {
+      "type": "object",
+      "description": "VIEW_RESULT event payload emitted by the view adapter.",
+      "required": ["view", "window_start", "window_end"],
+      "properties": {
+        "view": {
+          "type": "string",
+          "description": "Name of the view that produced this result."
+        },
+        "window_start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Window start timestamp (UTC)."
+        },
+        "window_end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Window end timestamp (UTC)."
+        },
+        "rows": {
+          "type": "array",
+          "description": "Result rows (batch emit mode only).",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "debezium_envelope": {
+      "type": "object",
+      "description": "Debezium-compatible envelope. Applied via the 'debezium' transform (--debezium-envelope).",
+      "required": ["schema", "payload"],
+      "properties": {
+        "schema": {
+          "type": "object",
+          "description": "Debezium schema descriptor.",
+          "properties": {
+            "type": { "type": "string", "const": "struct" },
+            "fields": { "type": "array" },
+            "optional": { "type": "boolean" },
+            "name": { "type": "string" }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "required": ["op"],
+          "properties": {
+            "before": {
+              "description": "Row state before the change (null for INSERT)."
+            },
+            "after": {
+              "description": "Row state after the change (null for DELETE)."
+            },
+            "op": {
+              "type": "string",
+              "enum": ["c", "u", "d", "r", "t"],
+              "description": "Debezium operation: c=create, u=update, d=delete, r=read (snapshot), t=truncate."
+            },
+            "ts_ms": {
+              "type": "integer",
+              "description": "Event timestamp in milliseconds since epoch."
+            },
+            "source": {
+              "type": "object",
+              "description": "Source metadata.",
+              "properties": {
+                "version": { "type": "string" },
+                "connector": { "type": "string" },
+                "name": { "type": "string" },
+                "ts_ms": { "type": "integer" },
+                "db": { "type": "string" },
+                "schema": { "type": "string" },
+                "table": { "type": "string" }
+              }
+            },
+            "transaction": {
+              "type": ["object", "null"],
+              "description": "Transaction metadata (when --tx-metadata is enabled).",
+              "properties": {
+                "id": { "type": "string" },
+                "total_order": { "type": "integer" },
+                "data_collection_order": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cloudevents_envelope": {
+      "type": "object",
+      "description": "CloudEvents v1.0 structured-mode JSON envelope. Applied via the 'cloudevents' transform.",
+      "required": ["specversion", "id", "type", "source", "time"],
+      "properties": {
+        "specversion": {
+          "type": "string",
+          "const": "1.0"
+        },
+        "id": {
+          "type": "string",
+          "description": "Event ID (from pgcdc event ID)."
+        },
+        "type": {
+          "type": "string",
+          "description": "Event type. Format: '<type_prefix>.<operation>'. Default prefix: 'io.pgcdc.change'.",
+          "examples": ["io.pgcdc.change.INSERT", "io.pgcdc.change.UPDATE"]
+        },
+        "source": {
+          "type": "string",
+          "description": "Event source URI-reference. Default: '/pgcdc'."
+        },
+        "time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Event timestamp. Uses transaction commit_time when available, otherwise created_at."
+        },
+        "datacontenttype": {
+          "type": "string",
+          "const": "application/json"
+        },
+        "subject": {
+          "type": "string",
+          "description": "Event channel."
+        },
+        "pgcdcchannel": {
+          "type": "string",
+          "description": "pgcdc extension attribute: original channel name."
+        },
+        "pgcdcoperation": {
+          "type": "string",
+          "description": "pgcdc extension attribute: original operation."
+        },
+        "pgcdcsource": {
+          "type": "string",
+          "description": "pgcdc extension attribute: detector source."
+        },
+        "data": {
+          "description": "Original event payload."
+        }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "#/definitions/base_event" }
+  ]
+}

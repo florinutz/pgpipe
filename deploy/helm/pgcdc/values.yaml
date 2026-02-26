@@ -1,0 +1,98 @@
+# pgcdc Helm chart values
+
+replicaCount: 1
+
+image:
+  repository: pgcdc
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# pgcdc configuration
+config:
+  # Required: PostgreSQL connection string
+  databaseUrl: ""
+  # Detector: wal, listennotify, outbox, mysql, mongodb
+  detector: "wal"
+  # Adapters to enable (list)
+  adapters:
+    - stdout
+  # WAL publication name (empty = auto-detect)
+  publication: ""
+  # Channels to subscribe to (empty = all)
+  channels: []
+  # Bus mode: fast (drop on full) or reliable (block on full)
+  busMode: "fast"
+  # Bus buffer size per subscriber
+  busBufferSize: 1024
+  # Shutdown drain timeout
+  shutdownTimeout: "5s"
+  # Extra CLI flags (appended to args)
+  extraArgs: []
+  # Full pgcdc.yaml content (optional, overrides individual config fields)
+  # yaml: |
+  #   transforms:
+  #     global:
+  #       - type: drop_columns
+  #         columns: [internal_id]
+
+# Webhook adapter settings
+webhook:
+  url: ""
+  maxRetries: 5
+
+# Prometheus metrics
+metrics:
+  enabled: true
+  port: 9090
+  serviceMonitor:
+    # Enable Prometheus Operator ServiceMonitor
+    enabled: false
+    # Scrape interval
+    interval: "30s"
+    # Additional labels for ServiceMonitor
+    labels: {}
+
+# Health check endpoint
+health:
+  port: 8080
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 64Mi
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 0
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels
+podLabels: {}
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Image pull secrets
+imagePullSecrets: []
+
+# Override name
+nameOverride: ""
+fullnameOverride: ""

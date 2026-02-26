@@ -81,6 +81,8 @@ func TestScenario_Embedding(t *testing.T) {
 			0, // timeout (default)
 			0, // backoffBase (default)
 			0, // backoffCap (default)
+			false,
+			0, 0, 0, 0,
 			testLogger(),
 		)
 		startPipeline(t, connStr, []string{channel}, adapter)
@@ -189,6 +191,8 @@ func TestScenario_Embedding(t *testing.T) {
 			[]string{"data"}, "id",
 			connStr, embTable, 4,
 			5, 0, 100*time.Millisecond, 500*time.Millisecond,
+			false,
+			0, 0, 0, 0,
 			testLogger(),
 		)
 		startPipeline(t, connStr, []string{channel}, adapter)

@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/florinutz/pgcdc/internal/config"
 )
 
 type validationResult struct {
@@ -57,6 +59,30 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		})
 	}
 
+	// Structural config validation.
+	cfg := config.Default()
+	if err := viper.Unmarshal(&cfg); err != nil {
+		results = append(results, validationResult{
+			component: "config",
+			status:    "FAIL",
+			message:   fmt.Sprintf("unmarshal: %s", err),
+		})
+		hasFailure = true
+	} else if err := cfg.Validate(); err != nil {
+		results = append(results, validationResult{
+			component: "config",
+			status:    "FAIL",
+			message:   err.Error(),
+		})
+		hasFailure = true
+	} else {
+		results = append(results, validationResult{
+			component: "config",
+			status:    "OK",
+			message:   "structural validation passed",
+		})
+	}
+
 	// Check configured adapters.
 	adapters := viper.GetStringSlice("adapters")
 	if len(adapters) == 0 {
@@ -66,12 +92,24 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			message:   "no adapters configured",
 		})
 	}
+	externalAdapters := map[string]bool{
+		"webhook": true, "embedding": true, "kafka": true, "nats": true,
+		"search": true, "redis": true, "pg_table": true, "s3": true,
+	}
 	for _, name := range adapters {
-		results = append(results, validationResult{
-			component: fmt.Sprintf("adapter/%s", name),
-			status:    "OK",
-			message:   "configured (deep validation not yet wired)",
-		})
+		if externalAdapters[name] {
+			results = append(results, validationResult{
+				component: fmt.Sprintf("adapter/%s", name),
+				status:    "OK",
+				message:   "configured (use pipeline startup for deep validation)",
+			})
+		} else {
+			results = append(results, validationResult{
+				component: fmt.Sprintf("adapter/%s", name),
+				status:    "OK",
+				message:   "configured (no external dependencies)",
+			})
+		}
 	}
 
 	// Check detector.
@@ -79,11 +117,23 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	if detectorType == "" {
 		detectorType = "listen_notify"
 	}
-	results = append(results, validationResult{
-		component: fmt.Sprintf("detector/%s", detectorType),
-		status:    "OK",
-		message:   "configured",
-	})
+	validDetectors := map[string]bool{
+		"listen_notify": true, "wal": true, "outbox": true, "mysql": true, "mongodb": true,
+	}
+	if !validDetectors[detectorType] {
+		results = append(results, validationResult{
+			component: fmt.Sprintf("detector/%s", detectorType),
+			status:    "FAIL",
+			message:   fmt.Sprintf("unknown detector type %q", detectorType),
+		})
+		hasFailure = true
+	} else {
+		results = append(results, validationResult{
+			component: fmt.Sprintf("detector/%s", detectorType),
+			status:    "OK",
+			message:   "configured",
+		})
+	}
 
 	// Print results table.
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)

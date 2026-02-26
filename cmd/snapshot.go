@@ -369,6 +369,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 				cfg.Webhook.Timeout,
 				cfg.Webhook.BackoffBase,
 				cfg.Webhook.BackoffCap,
+				cfg.Webhook.CBMaxFailures,
+				cfg.Webhook.CBResetTimeout,
+				cfg.Webhook.RateLimit,
+				cfg.Webhook.RateLimitBurst,
 				logger,
 			)))
 		case "file":
@@ -399,6 +403,11 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 				cfg.Embedding.Timeout,
 				cfg.Embedding.BackoffBase,
 				cfg.Embedding.BackoffCap,
+				cfg.Embedding.SkipUnchanged,
+				cfg.Embedding.CBMaxFailures,
+				cfg.Embedding.CBResetTimeout,
+				cfg.Embedding.RateLimit,
+				cfg.Embedding.RateLimitBurst,
 				logger,
 			)))
 		case "iceberg":

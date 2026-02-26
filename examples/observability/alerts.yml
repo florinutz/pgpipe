@@ -1,0 +1,56 @@
+groups:
+  - name: pgcdc
+    rules:
+      - alert: PgcdcSlotLagWarning
+        expr: pgcdc_slot_lag_bytes > 524288000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "pgcdc replication slot lag > 500MB"
+          description: "Replication slot lag is {{ $value | humanizeBytes }}, which may indicate slow consumers or a stalled pipeline."
+
+      - alert: PgcdcSlotLagCritical
+        expr: pgcdc_slot_lag_bytes > 2147483648
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "pgcdc replication slot lag > 2GB"
+          description: "Replication slot lag is {{ $value | humanizeBytes }}. Risk of WAL disk exhaustion. Investigate immediately."
+
+      - alert: PgcdcDLQActive
+        expr: rate(pgcdc_dlq_records_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "pgcdc dead letter queue receiving events"
+          description: "Adapter {{ $labels.adapter }} is sending events to the DLQ at {{ $value | printf \"%.2f\" }}/s."
+
+      - alert: PgcdcCircuitBreakerOpen
+        expr: pgcdc_circuit_breaker_state == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "pgcdc circuit breaker open for {{ $labels.adapter }}"
+          description: "Circuit breaker for adapter {{ $labels.adapter }} has been open for more than 5 minutes."
+
+      - alert: PgcdcPanicsDetected
+        expr: rate(pgcdc_panics_recovered_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "pgcdc panics detected in {{ $labels.component }}"
+          description: "Panics are being recovered in component {{ $labels.component }}. Check logs for stack traces."
+
+      - alert: PgcdcEventsDropped
+        expr: rate(pgcdc_events_dropped_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "pgcdc dropping events for {{ $labels.adapter }}"
+          description: "Events are being dropped for adapter {{ $labels.adapter }} at {{ $value | printf \"%.2f\" }}/s. Consider switching to reliable bus mode or increasing buffer size."

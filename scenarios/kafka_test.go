@@ -107,7 +107,7 @@ func TestScenario_KafkaAdapter(t *testing.T) {
 		brokers := startKafka(t)
 
 		logger := testLogger()
-		a := kafkaadapter.New(brokers, "", "", "", "", "", false, 0, 0, nil, logger, "")
+		a := kafkaadapter.New(brokers, "", "", "", "", "", false, 0, 0, nil, logger, "", 0, 0, 0, 0)
 
 		// Pre-create the topic to avoid "Unknown Topic Or Partition" race.
 		channel := "kafka_test"
@@ -215,7 +215,7 @@ func TestScenario_KafkaAdapter(t *testing.T) {
 
 		capDLQ := &captureDLQ{}
 		logger := testLogger()
-		a := kafkaadapter.New(brokers, tinyTopic, "", "", "", "", false, 0, 0, nil, logger, "")
+		a := kafkaadapter.New(brokers, tinyTopic, "", "", "", "", false, 0, 0, nil, logger, "", 0, 0, 0, 0)
 		a.SetDLQ(capDLQ)
 
 		// Wire a minimal pipeline.
@@ -280,7 +280,7 @@ func TestScenario_KafkaAdapter(t *testing.T) {
 		ensureKafkaTopic(t, brokers, channel)
 
 		// Create adapter with transactional ID.
-		a := kafkaadapter.New(brokers, "", "", "", "", "", false, 0, 0, nil, logger, "pgcdc-test-txn")
+		a := kafkaadapter.New(brokers, "", "", "", "", "", false, 0, 0, nil, logger, "pgcdc-test-txn", 0, 0, 0, 0)
 
 		// Wire pipeline.
 		pipelineCtx, pipelineCancel := context.WithCancel(context.Background())
