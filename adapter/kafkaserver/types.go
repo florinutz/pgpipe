@@ -25,6 +25,7 @@ const (
 	errUnknownMemberID          int16 = 25
 	errUnsupportedVersion       int16 = 35
 	errGroupAuthorizationFailed int16 = 30
+	errInvalidRequest           int16 = 42
 )
 
 // requestHeader is the common header for all Kafka requests.

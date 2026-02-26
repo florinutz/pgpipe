@@ -204,15 +204,19 @@ func (c *Controller) evaluate() {
 
 	// Update pause state.
 	switch {
-	case newZone == ZoneRed && !c.paused.Load():
-		c.paused.Store(true)
+	case newZone == ZoneRed:
 		c.mu.Lock()
-		c.pauseCh = make(chan struct{})
+		if !c.paused.Load() {
+			c.paused.Store(true)
+			c.pauseCh = make(chan struct{})
+		}
 		c.mu.Unlock()
-	case newZone != ZoneRed && c.paused.Load():
-		c.paused.Store(false)
+	case newZone != ZoneRed:
 		c.mu.Lock()
-		close(c.pauseCh)
+		if c.paused.Load() {
+			c.paused.Store(false)
+			close(c.pauseCh)
+		}
 		c.mu.Unlock()
 	}
 

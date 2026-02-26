@@ -315,6 +315,26 @@ func TestChain_Single(t *testing.T) {
 	}
 }
 
+func TestWithPayload_MalformedJSON(t *testing.T) {
+	ev := event.Event{ID: "1", Payload: json.RawMessage(`{broken`)}
+	result, err := withPayload(ev, func(m map[string]any) {
+		t.Fatal("mutator should not be called for malformed JSON")
+	})
+	if err != nil {
+		t.Fatalf("should not error on malformed JSON, got %v", err)
+	}
+	if string(result.Payload) != `{broken` {
+		t.Errorf("payload should be unchanged, got %s", result.Payload)
+	}
+}
+
+func TestErrDropEvent_NotMatchedByWrapping(t *testing.T) {
+	other := fmt.Errorf("some other error: %w", errors.New("inner"))
+	if errors.Is(other, ErrDropEvent) {
+		t.Error("unrelated wrapped error should not match ErrDropEvent")
+	}
+}
+
 func TestWithPayload_NonObject(t *testing.T) {
 	ev := event.Event{ID: "1", Payload: json.RawMessage(`[1,2,3]`)}
 	result, err := withPayload(ev, func(m map[string]any) {

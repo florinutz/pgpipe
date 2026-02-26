@@ -44,6 +44,15 @@ func (t *Tracker) Ack(name string, lsn uint64) {
 	}
 }
 
+// Deregister removes an adapter from the tracker. A dead adapter at LSN=0
+// would otherwise block the cooperative checkpoint from ever advancing.
+// Safe to call concurrently with Ack and MinAckedLSN.
+func (t *Tracker) Deregister(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.adapters, name)
+}
+
 // MinAckedLSN returns the minimum acknowledged LSN across all registered
 // adapters. Returns 0 if no adapters are registered or none have acked yet.
 // Updates the CooperativeCheckpointLSN metric.

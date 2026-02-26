@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/jackc/pgx/v5"
 )
+
+var validSnapshotName = regexp.MustCompile(`^[0-9A-Fa-f/:\-]+$`)
 
 const source = "snapshot"
 
@@ -44,8 +47,14 @@ func New(dbURL, table, where string, batchSize int, logger *slog.Logger) *Snapsh
 
 // SetSnapshotName sets an exported snapshot name (from CREATE_REPLICATION_SLOT)
 // to use with SET TRANSACTION SNAPSHOT for zero-gap snapshot-first workflows.
-func (s *Snapshot) SetSnapshotName(name string) {
+// Returns an error if the name contains characters outside the expected
+// PostgreSQL snapshot name format (hex digits, hyphens, forward slashes, colons).
+func (s *Snapshot) SetSnapshotName(name string) error {
+	if !validSnapshotName.MatchString(name) {
+		return fmt.Errorf("invalid snapshot name: %q", name)
+	}
 	s.snapshotName = name
+	return nil
 }
 
 // Run exports all rows from the table as SNAPSHOT events to the events channel.
