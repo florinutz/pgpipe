@@ -19,7 +19,7 @@ import (
 // readTimeout and idleTimeout configure the corresponding http.Server fields;
 // zero values leave them unset.
 // If checker is nil, /healthz is not registered. Metrics are mounted at /metrics.
-func New(sseBroker *sse.Broker, wsBroker *ws.Broker, corsOrigins []string, readTimeout, idleTimeout time.Duration, checker *health.Checker) *http.Server {
+func New(sseBroker *sse.Broker, wsBroker *ws.Broker, corsOrigins []string, readTimeout, idleTimeout time.Duration, checker *health.Checker, readiness *health.ReadinessChecker) *http.Server {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Recoverer)
@@ -30,6 +30,9 @@ func New(sseBroker *sse.Broker, wsBroker *ws.Broker, corsOrigins []string, readT
 
 	if checker != nil {
 		r.Get("/healthz", checker.ServeHTTP)
+	}
+	if readiness != nil {
+		r.Get("/readyz", readiness.ServeHTTP)
 	}
 
 	r.Handle("/metrics", promhttp.Handler())
@@ -77,11 +80,14 @@ func New(sseBroker *sse.Broker, wsBroker *ws.Broker, corsOrigins []string, readT
 
 // NewMetricsServer creates a standalone HTTP server for metrics and health
 // endpoints only (no SSE). Used when --metrics-addr is set and SSE is not active.
-func NewMetricsServer(checker *health.Checker) *http.Server {
+func NewMetricsServer(checker *health.Checker, readiness *health.ReadinessChecker) *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	if checker != nil {
 		r.Get("/healthz", checker.ServeHTTP)
+	}
+	if readiness != nil {
+		r.Get("/readyz", readiness.ServeHTTP)
 	}
 	r.Handle("/metrics", promhttp.Handler())
 

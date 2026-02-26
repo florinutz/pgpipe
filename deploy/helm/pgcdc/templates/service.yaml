@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pgcdc.fullname" . }}
+  labels:
+    {{- include "pgcdc.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    {{- if .Values.metrics.enabled }}
+    - port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    {{- end }}
+    - port: {{ .Values.health.port }}
+      targetPort: health
+      protocol: TCP
+      name: health
+  selector:
+    {{- include "pgcdc.selectorLabels" . | nindent 4 }}

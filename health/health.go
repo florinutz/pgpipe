@@ -75,3 +75,36 @@ func (c *Checker) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		Components: comps,
 	})
 }
+
+// ReadinessChecker tracks whether the system is ready to serve traffic.
+// Separate from liveness (Checker) for Kubernetes readiness probes.
+type ReadinessChecker struct {
+	mu    sync.RWMutex
+	ready bool
+}
+
+// NewReadinessChecker creates a ReadinessChecker in not-ready state.
+func NewReadinessChecker() *ReadinessChecker {
+	return &ReadinessChecker{}
+}
+
+// SetReady updates the readiness state.
+func (r *ReadinessChecker) SetReady(ready bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ready = ready
+}
+
+// ServeHTTP responds with readiness status.
+// Returns 200 when ready, 503 when not ready.
+func (r *ReadinessChecker) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	r.mu.RLock()
+	ready := r.ready
+	r.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if !ready {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ready": ready})
+}

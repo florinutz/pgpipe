@@ -25,5 +25,9 @@ func makeKafkaAdapter(cfg config.Config, enc encoding.Encoder, logger *slog.Logg
 		enc,
 		logger,
 		cfg.Kafka.TransactionalID,
+		cfg.Kafka.CBMaxFailures,
+		cfg.Kafka.CBResetTimeout,
+		cfg.Kafka.RateLimit,
+		cfg.Kafka.RateLimitBurst,
 	), nil
 }

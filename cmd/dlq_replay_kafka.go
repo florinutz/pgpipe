@@ -14,5 +14,5 @@ import (
 func buildKafkaReplayAdapter(cmd *cobra.Command, logger *slog.Logger) (adapter.Adapter, error) {
 	brokers, _ := cmd.Flags().GetStringSlice("kafka-brokers")
 	topic, _ := cmd.Flags().GetString("kafka-topic")
-	return kafkaadapter.New(brokers, topic, "", "", "", "", false, 0, 0, encoding.JSONEncoder{}, logger, ""), nil
+	return kafkaadapter.New(brokers, topic, "", "", "", "", false, 0, 0, encoding.JSONEncoder{}, logger, "", 0, 0, 0, 0), nil
 }

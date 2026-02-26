@@ -18,6 +18,8 @@ import (
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/circuitbreaker"
+	"github.com/florinutz/pgcdc/internal/ratelimit"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/tracing"
@@ -39,22 +41,25 @@ const (
 // OpenAI-compatible API, and UPSERTs the vectors into a pgvector table.
 // DELETE events remove the corresponding vector row.
 type Adapter struct {
-	apiURL      string
-	apiKey      string
-	model       string
-	columns     []string
-	idColumn    string
-	dbURL       string
-	table       string
-	dimension   int
-	maxRetries  int
-	backoffBase time.Duration
-	backoffCap  time.Duration
-	client      *http.Client
-	logger      *slog.Logger
-	dlq         dlq.DLQ
-	ackFn       adapter.AckFunc
-	tracer      trace.Tracer
+	apiURL        string
+	apiKey        string
+	model         string
+	columns       []string
+	idColumn      string
+	dbURL         string
+	table         string
+	dimension     int
+	maxRetries    int
+	backoffBase   time.Duration
+	backoffCap    time.Duration
+	skipUnchanged bool
+	client        *http.Client
+	logger        *slog.Logger
+	dlq           dlq.DLQ
+	ackFn         adapter.AckFunc
+	tracer        trace.Tracer
+	cb            *circuitbreaker.CircuitBreaker
+	limiter       *ratelimit.Limiter
 }
 
 // SetTracer implements adapter.Traceable.
@@ -76,6 +81,9 @@ func New(
 	dimension int,
 	maxRetries int,
 	timeout, backoffBase, backoffCap time.Duration,
+	skipUnchanged bool,
+	cbMaxFailures int, cbResetTimeout time.Duration,
+	rateLimit float64, rateBurst int,
 	logger *slog.Logger,
 ) *Adapter {
 	if model == "" {
@@ -105,21 +113,27 @@ func New(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Adapter{
-		apiURL:      apiURL,
-		apiKey:      apiKey,
-		model:       model,
-		columns:     columns,
-		idColumn:    idColumn,
-		dbURL:       dbURL,
-		table:       table,
-		dimension:   dimension,
-		maxRetries:  maxRetries,
-		backoffBase: backoffBase,
-		backoffCap:  backoffCap,
-		client:      &http.Client{Timeout: timeout},
-		logger:      logger.With("adapter", "embedding"),
+	a := &Adapter{
+		apiURL:        apiURL,
+		apiKey:        apiKey,
+		model:         model,
+		columns:       columns,
+		idColumn:      idColumn,
+		dbURL:         dbURL,
+		table:         table,
+		dimension:     dimension,
+		maxRetries:    maxRetries,
+		backoffBase:   backoffBase,
+		backoffCap:    backoffCap,
+		skipUnchanged: skipUnchanged,
+		client:        &http.Client{Timeout: timeout},
+		logger:        logger.With("adapter", "embedding"),
+		limiter:       ratelimit.New(rateLimit, rateBurst, "embedding", logger),
 	}
+	if cbMaxFailures > 0 {
+		a.cb = circuitbreaker.New(cbMaxFailures, cbResetTimeout, logger)
+	}
+	return a
 }
 
 // Name returns the adapter name.
@@ -221,10 +235,27 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 				return nil
 			}
 
+			// Circuit breaker check.
+			if a.cb != nil && !a.cb.Allow() {
+				metrics.CircuitBreakerState.WithLabelValues("embedding").Set(1) // open
+				if a.dlq != nil {
+					_ = a.dlq.Record(ctx, ev, "embedding", &pgcdcerr.CircuitBreakerOpenError{Adapter: "embedding"})
+				}
+				if a.ackFn != nil && ev.LSN > 0 {
+					a.ackFn(ev.LSN)
+				}
+				continue
+			}
+
+			// Rate limiter.
+			if err := a.limiter.Wait(ctx); err != nil {
+				return ctx.Err()
+			}
+
 			embedCtx, span := a.startDeliverySpan(ctx, ev)
 			_ = embedCtx // used for API calls below
 
-			sourceID, sourceTable, content, isDel := a.extractPayload(ev)
+			sourceID, sourceTable, content, isDel, p := a.extractPayload(ev)
 			if sourceID == "" {
 				a.logger.Warn("could not extract source ID, skipping event",
 					"event_id", ev.ID,
@@ -257,6 +288,18 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 				continue
 			}
 
+			if !a.embeddingColumnsChanged(p) {
+				metrics.EmbeddingSkipped.Inc()
+				a.logger.Debug("skipping unchanged embedding columns", "event_id", ev.ID, "source_id", sourceID)
+				if a.ackFn != nil && ev.LSN > 0 {
+					a.ackFn(ev.LSN)
+				}
+				if span != nil {
+					span.End()
+				}
+				continue
+			}
+
 			if content == "" {
 				a.logger.Warn("no text content extracted, skipping event",
 					"event_id", ev.ID,
@@ -270,6 +313,9 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 
 			vec, err := a.embed(embedCtx, ev.ID, content)
 			if err != nil {
+				if a.cb != nil {
+					a.cb.RecordFailure()
+				}
 				metrics.EmbeddingAPIErrors.Inc()
 				if span != nil {
 					span.RecordError(err)
@@ -303,6 +349,9 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 				continue
 			}
 
+			if a.cb != nil {
+				a.cb.RecordSuccess()
+			}
 			metrics.EventsDelivered.WithLabelValues("embedding").Inc()
 			a.logger.Debug("vector upserted", "source_id", sourceID, "source_table", sourceTable)
 			if span != nil {
@@ -445,22 +494,23 @@ type payload struct {
 	Op    string                 `json:"op"`
 	Table string                 `json:"table"`
 	Row   map[string]interface{} `json:"row"`
+	Old   map[string]interface{} `json:"old"`
 }
 
 // extractPayload parses the event payload and returns the source ID, table,
-// concatenated text content, and whether this is a DELETE operation.
-func (a *Adapter) extractPayload(ev event.Event) (sourceID, sourceTable, content string, isDel bool) {
-	var p payload
+// concatenated text content, whether this is a DELETE operation, and the
+// parsed payload (for change detection).
+func (a *Adapter) extractPayload(ev event.Event) (sourceID, sourceTable, content string, isDel bool, p payload) {
 	if err := json.Unmarshal(ev.Payload, &p); err != nil {
 		a.logger.Warn("failed to parse event payload", "event_id", ev.ID, "error", err)
-		return "", "", "", false
+		return "", "", "", false, p
 	}
 
 	sourceTable = p.Table
 	isDel = p.Op == "DELETE"
 
 	if p.Row == nil {
-		return "", sourceTable, "", isDel
+		return "", sourceTable, "", isDel, p
 	}
 
 	// Extract source ID.
@@ -477,7 +527,30 @@ func (a *Adapter) extractPayload(ev event.Event) (sourceID, sourceTable, content
 	}
 	content = strings.Join(parts, " ")
 
-	return sourceID, sourceTable, content, isDel
+	return sourceID, sourceTable, content, isDel, p
+}
+
+// embeddingColumnsChanged returns true if any of the embedding columns
+// differ between old and new row values. Returns true when old is nil
+// (INSERT) or when skip-unchanged is disabled.
+func (a *Adapter) embeddingColumnsChanged(p payload) bool {
+	if !a.skipUnchanged {
+		return true
+	}
+	if p.Op != "UPDATE" {
+		return true
+	}
+	if p.Old == nil {
+		return true // no old values to compare
+	}
+	for _, col := range a.columns {
+		newVal := fmt.Sprintf("%v", p.Row[col])
+		oldVal := fmt.Sprintf("%v", p.Old[col])
+		if newVal != oldVal {
+			return true
+		}
+	}
+	return false
 }
 
 // formatVector converts a float64 slice to the pgvector string format "[v1,v2,...]".

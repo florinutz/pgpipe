@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pgcdc.fullname" . }}
+  labels:
+    {{- include "pgcdc.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "pgcdc.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "pgcdc.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "pgcdc.serviceAccountName" . }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - listen
+            - "--db={{ .Values.config.databaseUrl }}"
+            - "--detector={{ .Values.config.detector }}"
+            {{- range .Values.config.adapters }}
+            - "--adapter={{ . }}"
+            {{- end }}
+            {{- if .Values.config.publication }}
+            - "--publication={{ .Values.config.publication }}"
+            {{- end }}
+            {{- range .Values.config.channels }}
+            - "--channel={{ . }}"
+            {{- end }}
+            - "--bus-mode={{ .Values.config.busMode }}"
+            - "--bus-buffer-size={{ .Values.config.busBufferSize }}"
+            - "--shutdown-timeout={{ .Values.config.shutdownTimeout }}"
+            {{- if .Values.metrics.enabled }}
+            - "--metrics-addr=:{{ .Values.metrics.port }}"
+            {{- end }}
+            - "--health-addr=:{{ .Values.health.port }}"
+            {{- if .Values.webhook.url }}
+            - "--webhook-url={{ .Values.webhook.url }}"
+            - "--webhook-max-retries={{ .Values.webhook.maxRetries }}"
+            {{- end }}
+            {{- if .Values.config.yaml }}
+            - "--config=/etc/pgcdc/pgcdc.yaml"
+            {{- end }}
+            {{- range .Values.config.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+            - name: health
+              containerPort: {{ .Values.health.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.config.yaml }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/pgcdc
+              readOnly: true
+          {{- end }}
+      {{- if .Values.config.yaml }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "pgcdc.fullname" . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

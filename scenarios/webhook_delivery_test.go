@@ -22,7 +22,7 @@ func TestScenario_WebhookDelivery(t *testing.T) {
 	t.Run("happy path", func(t *testing.T) {
 		signingKey := "test-secret-key"
 		receiver := newWebhookReceiver(t, alwaysOK)
-		a := webhook.New(receiver.Server.URL, nil, signingKey, 3, 0, 0, 0, testLogger())
+		a := webhook.New(receiver.Server.URL, nil, signingKey, 3, 0, 0, 0, 0, 0, 0, 0, testLogger())
 
 		startPipeline(t, connStr, []string{"webhook_happy"}, a)
 		time.Sleep(1 * time.Second)
@@ -67,7 +67,7 @@ func TestScenario_WebhookDelivery(t *testing.T) {
 			}
 			return http.StatusOK
 		})
-		a := webhook.New(receiver.Server.URL, nil, "", 3, 0, 0, 0, testLogger())
+		a := webhook.New(receiver.Server.URL, nil, "", 3, 0, 0, 0, 0, 0, 0, 0, testLogger())
 
 		startPipeline(t, connStr, []string{"webhook_retry"}, a)
 		time.Sleep(1 * time.Second)
@@ -99,7 +99,7 @@ func TestScenario_WebhookDelivery(t *testing.T) {
 			return http.StatusInternalServerError
 		})
 		// maxRetries=2 with fast backoff so retries complete quickly.
-		a := webhook.New(receiver.Server.URL, nil, "", 2, 0, 50*time.Millisecond, 100*time.Millisecond, testLogger())
+		a := webhook.New(receiver.Server.URL, nil, "", 2, 0, 50*time.Millisecond, 100*time.Millisecond, 0, 0, 0, 0, testLogger())
 
 		startPipeline(t, connStr, []string{"webhook_exhaust"}, a)
 		time.Sleep(1 * time.Second)

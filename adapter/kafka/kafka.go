@@ -22,6 +22,8 @@ import (
 	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/circuitbreaker"
+	"github.com/florinutz/pgcdc/internal/ratelimit"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/tracing"
@@ -45,6 +47,8 @@ type Adapter struct {
 	backoffCap    time.Duration
 	logger        *slog.Logger
 	tracer        trace.Tracer
+	cb            *circuitbreaker.CircuitBreaker
+	limiter       *ratelimit.Limiter
 }
 
 // SetTracer implements adapter.Traceable.
@@ -92,6 +96,8 @@ func New(
 	encoder encoding.Encoder,
 	logger *slog.Logger,
 	transactionalID string,
+	cbMaxFailures int, cbResetTimeout time.Duration,
+	rateLimitVal float64, rateBurst int,
 ) *Adapter {
 	if logger == nil {
 		logger = slog.Default()
@@ -139,7 +145,7 @@ func New(
 		opts = append(opts, kgo.TransactionalID(transactionalID))
 	}
 
-	return &Adapter{
+	a := &Adapter{
 		opts:          opts,
 		topic:         topic,
 		transactional: transactional,
@@ -147,7 +153,12 @@ func New(
 		backoffBase:   backoffBase,
 		backoffCap:    backoffCap,
 		logger:        logger.With("adapter", adapterName),
+		limiter:       ratelimit.New(rateLimitVal, rateBurst, adapterName, logger),
 	}
+	if cbMaxFailures > 0 {
+		a.cb = circuitbreaker.New(cbMaxFailures, cbResetTimeout, logger)
+	}
+	return a
 }
 
 // Start connects to Kafka and publishes events from the channel. It blocks
@@ -204,6 +215,23 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 }
 
 func (a *Adapter) handleEvent(ctx context.Context, client *kgo.Client, ev event.Event) error {
+	// Circuit breaker check.
+	if a.cb != nil && !a.cb.Allow() {
+		metrics.CircuitBreakerState.WithLabelValues(adapterName).Set(1) // open
+		if a.dlqInstance != nil {
+			_ = a.dlqInstance.Record(ctx, ev, adapterName, &pgcdcerr.CircuitBreakerOpenError{Adapter: adapterName})
+		}
+		if a.ackFn != nil && ev.LSN > 0 {
+			a.ackFn(ev.LSN)
+		}
+		return nil
+	}
+
+	// Rate limiter.
+	if err := a.limiter.Wait(ctx); err != nil {
+		return ctx.Err()
+	}
+
 	topic := a.topicForEvent(ev)
 
 	value := ev.Payload
@@ -276,6 +304,9 @@ func (a *Adapter) handleEvent(ctx context.Context, client *kgo.Client, ev event.
 	metrics.KafkaPublishDuration.Observe(time.Since(start).Seconds())
 
 	if produceErr != nil {
+		if a.cb != nil {
+			a.cb.RecordFailure()
+		}
 		metrics.KafkaErrors.Add(1)
 		if span != nil {
 			span.RecordError(produceErr)
@@ -302,6 +333,9 @@ func (a *Adapter) handleEvent(ctx context.Context, client *kgo.Client, ev event.
 		return pgcdcerr.WrapEvent(produceErr, adapterName, ev)
 	}
 
+	if a.cb != nil {
+		a.cb.RecordSuccess()
+	}
 	if span != nil {
 		span.End()
 	}

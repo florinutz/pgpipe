@@ -39,6 +39,7 @@ import (
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/encoding/registry"
+	"github.com/florinutz/pgcdc/health"
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/internal/migrate"
 	"github.com/florinutz/pgcdc/internal/server"
@@ -131,6 +132,7 @@ func init() {
 	f.String("embedding-table", "", "destination pgvector table (default: pgcdc_embeddings)")
 	f.String("embedding-db-url", "", "PostgreSQL URL for pgvector table (default: same as --db)")
 	f.Int("embedding-dimension", 0, "vector dimension (default: 1536)")
+	f.Bool("embedding-skip-unchanged", false, "skip embedding when embedding columns haven't changed on UPDATE")
 
 	// Iceberg adapter flags.
 	f.String("iceberg-catalog", "hadoop", "Iceberg catalog type: hadoop, rest, sql")
@@ -416,6 +418,7 @@ func init() {
 	mustBindPFlag("embedding.table", f.Lookup("embedding-table"))
 	mustBindPFlag("embedding.db_url", f.Lookup("embedding-db-url"))
 	mustBindPFlag("embedding.dimension", f.Lookup("embedding-dimension"))
+	mustBindPFlag("embedding.skip_unchanged", f.Lookup("embedding-skip-unchanged"))
 
 	mustBindPFlag("bus.mode", f.Lookup("bus-mode"))
 
@@ -945,6 +948,10 @@ func runListen(cmd *cobra.Command, args []string) error {
 				cfg.Webhook.Timeout,
 				cfg.Webhook.BackoffBase,
 				cfg.Webhook.BackoffCap,
+				cfg.Webhook.CBMaxFailures,
+				cfg.Webhook.CBResetTimeout,
+				cfg.Webhook.RateLimit,
+				cfg.Webhook.RateLimitBurst,
 				logger,
 			)))
 		case "sse":
@@ -981,6 +988,11 @@ func runListen(cmd *cobra.Command, args []string) error {
 				cfg.Embedding.Timeout,
 				cfg.Embedding.BackoffBase,
 				cfg.Embedding.BackoffCap,
+				cfg.Embedding.SkipUnchanged,
+				cfg.Embedding.CBMaxFailures,
+				cfg.Embedding.CBResetTimeout,
+				cfg.Embedding.RateLimit,
+				cfg.Embedding.RateLimitBurst,
 				logger,
 			)))
 		case "iceberg":
@@ -1139,11 +1151,16 @@ func runListen(cmd *cobra.Command, args []string) error {
 	defer pluginTransformCleanup()
 	defer closePluginRuntime(ctx, wasmRT)
 
+	// Readiness checker: starts not-ready, set ready after pipeline starts.
+	readiness := health.NewReadinessChecker()
+
 	// Use an errgroup to run the pipeline alongside CLI-specific HTTP servers.
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// Run the core pipeline (detector + bus + adapters).
 	g.Go(func() error {
+		readiness.SetReady(true)
+		defer readiness.SetReady(false)
 		return p.Run(gCtx)
 	})
 
@@ -1208,7 +1225,7 @@ func runListen(cmd *cobra.Command, args []string) error {
 
 	// If SSE or WS is active, start the HTTP server with SSE/WS + metrics + health.
 	if (hasSSE && sseBroker != nil) || (hasWS && wsBroker != nil) {
-		httpServer := server.New(sseBroker, wsBroker, cfg.SSE.CORSOrigins, cfg.SSE.ReadTimeout, cfg.SSE.IdleTimeout, p.Health())
+		httpServer := server.New(sseBroker, wsBroker, cfg.SSE.CORSOrigins, cfg.SSE.ReadTimeout, cfg.SSE.IdleTimeout, p.Health(), readiness)
 		httpServer.Addr = cfg.SSE.Addr
 
 		g.Go(func() error {
@@ -1234,7 +1251,7 @@ func runListen(cmd *cobra.Command, args []string) error {
 
 	// If --metrics-addr is set, start a dedicated metrics/health server.
 	if cfg.MetricsAddr != "" {
-		metricsServer := server.NewMetricsServer(p.Health())
+		metricsServer := server.NewMetricsServer(p.Health(), readiness)
 		metricsServer.Addr = cfg.MetricsAddr
 
 		g.Go(func() error {

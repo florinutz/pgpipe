@@ -134,7 +134,7 @@ func startPipelineWithWS(t *testing.T, connStr string, channels []string) (strin
 	g.Go(func() error { return wsBroker.Start(gCtx, sub) })
 
 	// Start HTTP server with WS routes.
-	httpServer := server.New(nil, wsBroker, nil, 0, 0, nil)
+	httpServer := server.New(nil, wsBroker, nil, 0, 0, nil, nil)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		cancel()

@@ -1,0 +1,11 @@
+{{- if .Values.config.yaml }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pgcdc.fullname" . }}
+  labels:
+    {{- include "pgcdc.labels" . | nindent 4 }}
+data:
+  pgcdc.yaml: |
+    {{- .Values.config.yaml | nindent 4 }}
+{{- end }}
