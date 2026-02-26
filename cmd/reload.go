@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"log/slog"
 	"strings"
 
 	"github.com/florinutz/pgcdc/internal/config"
+	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/transform"
 	"github.com/spf13/cobra"
 )
@@ -156,6 +158,8 @@ func specToTransform(spec config.TransformSpec) transform.TransformFunc {
 		}
 		return transform.CloudEvents(copts...)
 	default:
+		slog.Warn("unknown transform type in config, skipping", "type", spec.Type)
+		metrics.ConfigReloadErrors.Inc()
 		return nil
 	}
 }

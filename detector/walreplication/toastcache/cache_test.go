@@ -2,6 +2,8 @@ package toastcache
 
 import (
 	"testing"
+
+	"github.com/jackc/pglogrepl"
 )
 
 func TestPutGet(t *testing.T) {
@@ -146,6 +148,27 @@ func TestEvictAll(t *testing.T) {
 
 	if c.Len() != 0 {
 		t.Fatalf("expected 0 entries, got %d", c.Len())
+	}
+}
+
+func TestBuildPK_NullByteSeparatorCollision(t *testing.T) {
+	// With the old \x00 separator, these two would produce the same key.
+	// With length-prefixed encoding, they must differ.
+	rel := &pglogrepl.RelationMessage{
+		Columns: []*pglogrepl.RelationMessageColumn{
+			{Name: "a", Flags: 1},
+			{Name: "b", Flags: 1},
+		},
+	}
+
+	row1 := map[string]any{"a": "x\x00y", "b": "z"}
+	row2 := map[string]any{"a": "x", "b": "y\x00z"}
+
+	pk1 := BuildPK(rel, row1)
+	pk2 := BuildPK(rel, row2)
+
+	if pk1 == pk2 {
+		t.Fatalf("collision: pk1=%q pk2=%q should differ", pk1, pk2)
 	}
 }
 

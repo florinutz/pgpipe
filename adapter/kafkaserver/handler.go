@@ -202,7 +202,7 @@ func (h *handler) handleJoinGroup(_ requestHeader, body []byte) []byte {
 
 	if d.err != nil {
 		metrics.KafkaServerProtocolErrors.Inc()
-		return h.encodeJoinGroupError(errGroupAuthorizationFailed)
+		return h.encodeJoinGroupError(errInvalidRequest)
 	}
 
 	g := h.groups.getOrCreate(req.GroupID)
@@ -256,7 +256,7 @@ func (h *handler) handleSyncGroup(_ requestHeader, body []byte) []byte {
 	if d.err != nil {
 		metrics.KafkaServerProtocolErrors.Inc()
 		enc := newEncoder(16)
-		enc.putInt16(errGroupAuthorizationFailed)
+		enc.putInt16(errInvalidRequest)
 		enc.putBytes(nil)
 		return enc.bytes()
 	}
@@ -282,7 +282,7 @@ func (h *handler) handleHeartbeat(_ requestHeader, body []byte) []byte {
 
 	if d.err != nil {
 		enc := newEncoder(4)
-		enc.putInt16(errGroupAuthorizationFailed)
+		enc.putInt16(errInvalidRequest)
 		return enc.bytes()
 	}
 
@@ -305,7 +305,7 @@ func (h *handler) handleLeaveGroup(_ requestHeader, body []byte) []byte {
 
 	if d.err != nil {
 		enc := newEncoder(4)
-		enc.putInt16(errGroupAuthorizationFailed)
+		enc.putInt16(errInvalidRequest)
 		return enc.bytes()
 	}
 
@@ -638,6 +638,11 @@ func (h *handler) findLSNForOffset(topic string, partition int32, offset int64) 
 	// Read just this one record.
 	records, errCode := p.readFrom(offset, 1024*1024)
 	if errCode != errNone || len(records) == 0 {
+		h.logger.Warn("offset out of range for LSN lookup",
+			"topic", topic,
+			"partition", partition,
+			"offset", offset,
+		)
 		return 0
 	}
 	return records[0].LSN

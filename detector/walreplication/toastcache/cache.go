@@ -1,6 +1,7 @@
 package toastcache
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -60,7 +61,14 @@ func BuildPK(rel *pglogrepl.RelationMessage, row map[string]any) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return strings.Join(parts, "\x00")
+	var b strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		fmt.Fprintf(&b, "%d:%s", len(p), p)
+	}
+	return b.String()
 }
 
 func stringify(v any) string {

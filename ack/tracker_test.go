@@ -64,6 +64,29 @@ func TestTracker_MinAckedLSN_MultipleAdapters(t *testing.T) {
 	}
 }
 
+func TestTracker_Deregister(t *testing.T) {
+	tr := ack.New()
+	tr.Register("fast", 0)
+	tr.Register("dead", 0)
+
+	tr.Ack("fast", 500)
+	// Dead adapter at LSN=0 blocks checkpoint.
+	if got := tr.MinAckedLSN(); got != 0 {
+		t.Errorf("before deregister: want 0 (blocked by dead), got %d", got)
+	}
+
+	tr.Deregister("dead")
+
+	if got := tr.MinAckedLSN(); got != 500 {
+		t.Errorf("after deregister: want 500, got %d", got)
+	}
+}
+
+func TestTracker_Deregister_NonExistent(t *testing.T) {
+	tr := ack.New()
+	tr.Deregister("nonexistent") // should not panic
+}
+
 func TestTracker_ConcurrentAck(t *testing.T) {
 	tr := ack.New()
 	tr.Register("a", 0)

@@ -1,6 +1,8 @@
 package kafkaserver
 
 import (
+	"sort"
+	"sync"
 	"testing"
 	"time"
 )
@@ -148,5 +150,69 @@ func TestPartitionEmpty(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Errorf("readFrom(0) on empty: got %d records, want 0", len(records))
+	}
+}
+
+func TestPartitionConcurrentAppendRead(t *testing.T) {
+	p := newPartition(10000)
+	var wg sync.WaitGroup
+
+	// 10 writers, 100 records each.
+	for w := 0; w < 10; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				p.append(record{Key: []byte("k"), Value: []byte(`{}`)})
+			}
+		}()
+	}
+
+	// 5 readers reading concurrently.
+	for r := 0; r < 5; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				p.readFrom(0, 1024*1024)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	total := p.currentSize()
+	if total != 1000 {
+		t.Errorf("total records: got %d, want 1000", total)
+	}
+}
+
+func TestPartitionOffsetMonotonicity(t *testing.T) {
+	p := newPartition(10000)
+
+	const goroutines = 100
+	offsets := make([]int64, goroutines)
+	var wg sync.WaitGroup
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			offsets[idx] = p.append(record{Key: []byte("k"), Value: []byte(`{}`)})
+		}(i)
+	}
+	wg.Wait()
+
+	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+
+	// Verify strictly increasing with no gaps.
+	for i := 1; i < len(offsets); i++ {
+		if offsets[i] != offsets[i-1]+1 {
+			t.Fatalf("gap at index %d: offset[%d]=%d, offset[%d]=%d",
+				i, i-1, offsets[i-1], i, offsets[i])
+		}
+	}
+	if offsets[0] != 0 {
+		t.Errorf("first offset: got %d, want 0", offsets[0])
 	}
 }

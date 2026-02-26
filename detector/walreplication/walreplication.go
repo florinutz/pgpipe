@@ -377,7 +377,9 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 		}
 
 		snap := snapshot.New(d.dbURL, d.snapshotTable, d.snapshotWhere, d.snapshotBatchSize, d.logger)
-		snap.SetSnapshotName(result.SnapshotName)
+		if err := snap.SetSnapshotName(result.SnapshotName); err != nil {
+			return fmt.Errorf("snapshot-first: %w", err)
+		}
 
 		d.logger.Info("snapshot-first: exporting existing rows",
 			"table", d.snapshotTable,

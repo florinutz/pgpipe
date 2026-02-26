@@ -1,6 +1,7 @@
 package kafkaserver
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -190,5 +191,28 @@ func TestGroupReapExpired(t *testing.T) {
 	}
 	if g.state != groupEmpty {
 		t.Errorf("after reap: state = %v, want Empty", g.state)
+	}
+}
+
+func TestGenerateMemberID_Uniqueness(t *testing.T) {
+	const n = 1000
+	var wg sync.WaitGroup
+	ids := make([]string, n)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			ids[idx] = generateMemberID("g")
+		}(i)
+	}
+	wg.Wait()
+
+	seen := make(map[string]struct{}, n)
+	for _, id := range ids {
+		if _, exists := seen[id]; exists {
+			t.Fatalf("duplicate member ID: %q", id)
+		}
+		seen[id] = struct{}{}
 	}
 }

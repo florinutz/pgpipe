@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/florinutz/pgcdc/cmd.Version=$(VERSION)
 
-.PHONY: build build-slim build-slim-stripped size test test-scenarios test-all lint vet fmt bench coverage docker-build docker-up docker-down clean help
+.PHONY: build build-slim build-slim-stripped size test test-scenarios test-all lint vet fmt bench bench-unit bench-compare bench-save fuzz coverage docker-build docker-up docker-down clean help
 
 SLIM_TAGS := no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins,no_views
 
@@ -57,9 +57,27 @@ docker-up:
 docker-down:
 	docker compose down
 
-## bench: Run benchmarks (requires Docker)
+## bench: Run integration benchmarks (requires Docker)
 bench:
 	./bench/run.sh
+
+## bench-unit: Run micro-benchmarks (no Docker needed)
+bench-unit:
+	go test -bench=. -benchmem -count=3 -timeout=120s $$(go list ./... | grep -v /scenarios)
+
+## bench-compare: Compare current benchmarks against baseline
+bench-compare:
+	go test -bench=. -benchmem -count=5 -timeout=120s $$(go list ./... | grep -v /scenarios) | tee bench-current.txt
+	benchstat bench-baseline.txt bench-current.txt
+
+## bench-save: Save current benchmark results as baseline
+bench-save:
+	go test -bench=. -benchmem -count=5 -timeout=120s $$(go list ./... | grep -v /scenarios) > bench-baseline.txt
+
+## fuzz: Run all fuzz tests for 30s each
+fuzz:
+	go test -fuzz=Fuzz -fuzztime=30s ./adapter/kafkaserver/
+	go test -fuzz=Fuzz -fuzztime=30s ./transform/
 
 ## coverage: Generate test coverage report
 coverage:

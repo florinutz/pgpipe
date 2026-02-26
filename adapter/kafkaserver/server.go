@@ -117,6 +117,7 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 	// Accept loop.
 	var wg sync.WaitGroup
 	go func() {
+		acceptBackoff := 10 * time.Millisecond
 		for {
 			conn, acceptErr := ln.Accept()
 			if acceptErr != nil {
@@ -125,9 +126,17 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 					return
 				default:
 					a.logger.Error("accept error", "error", acceptErr)
+					// Exponential backoff on persistent accept errors.
+					time.Sleep(acceptBackoff)
+					acceptBackoff *= 2
+					if acceptBackoff > time.Second {
+						acceptBackoff = time.Second
+					}
 					continue
 				}
 			}
+
+			acceptBackoff = 10 * time.Millisecond
 
 			wg.Add(1)
 			a.activeConns.Add(1)

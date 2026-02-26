@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/google/uuid"
 )
 
 // groupState represents the state of a consumer group.
@@ -350,9 +351,7 @@ func generateMemberID(groupID string) string {
 	return groupID + "-" + randomID()
 }
 
-// randomID generates a short random ID for member identification.
+// randomID generates a unique random ID for member identification.
 func randomID() string {
-	// Use time-based + simple counter for uniqueness.
-	// For production-grade, you'd use UUID, but this is sufficient.
-	return time.Now().Format("20060102150405.000000000")
+	return uuid.New().String()
 }

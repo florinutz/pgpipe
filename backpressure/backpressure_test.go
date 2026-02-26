@@ -2,6 +2,7 @@ package backpressure
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -259,6 +260,46 @@ func TestIsShed_UnregisteredAdapter(t *testing.T) {
 	c := New(500, 2000, 0, 0, nil, nil)
 	if c.IsShed("unknown") {
 		t.Fatal("unregistered adapter should not be shed")
+	}
+}
+
+func TestEvaluate_ConcurrentRedEntry(t *testing.T) {
+	var lag atomic.Int64
+	lag.Store(3000)
+
+	c := New(500, 2000, 500*time.Millisecond, 0, nil, nil)
+	c.SetLagFunc(lag.Load)
+
+	// Two goroutines entering red zone simultaneously.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.evaluate()
+		}()
+	}
+	wg.Wait()
+
+	if !c.IsPaused() {
+		t.Fatal("should be paused after concurrent red entries")
+	}
+
+	// WaitResume must unblock when we exit red.
+	done := make(chan struct{})
+	go func() {
+		_ = c.WaitResume(context.Background())
+		close(done)
+	}()
+
+	lag.Store(0)
+	c.evaluate()
+
+	select {
+	case <-done:
+		// ok
+	case <-time.After(time.Second):
+		t.Fatal("WaitResume did not unblock after concurrent evaluate exiting red")
 	}
 }
 
