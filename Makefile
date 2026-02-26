@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/florinutz/pgcdc/cmd.Version=$(VERSION)
 
-.PHONY: build build-slim build-slim-stripped size test test-scenarios test-all lint vet fmt bench bench-unit bench-compare bench-save fuzz coverage docker-build docker-up docker-down clean help
+.PHONY: build build-slim build-slim-stripped size test test-scenarios test-all lint vet fmt bench bench-unit bench-compare bench-save bench-debezium fuzz coverage docker-build docker-up docker-down clean help
 
 SLIM_TAGS := no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins,no_views
 
@@ -73,6 +73,10 @@ bench-compare:
 ## bench-save: Save current benchmark results as baseline
 bench-save:
 	go test -bench=. -benchmem -count=5 -timeout=120s $$(go list ./... | grep -v /scenarios) > bench-baseline.txt
+
+## bench-debezium: Run Debezium comparison benchmarks (requires Docker, slow)
+bench-debezium:
+	go test -tags=debezium -bench=BenchmarkComparison -benchtime=1x -timeout=15m -count=1 -v ./bench/
 
 ## fuzz: Run all fuzz tests for 30s each
 fuzz:

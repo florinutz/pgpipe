@@ -63,10 +63,8 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 	}
 
 	funcMap := template.FuncMap{
-		"has": func(m map[string]bool, key string) bool { return m[key] },
-		"join": func(items []string, sep string) string {
-			return strings.Join(items, sep)
-		},
+		"has":  func(m map[string]bool, key string) bool { return m[key] },
+		"join": strings.Join,
 		"adapterList": func(m map[string]bool) string {
 			names := make([]string, 0, len(m))
 			for k := range m {
@@ -186,7 +184,7 @@ func runConfigValidate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("config validation failed with %d error(s)", len(errors))
 	}
 
-	fmt.Fprintf(os.Stdout, "Config %s is valid (detector: %s, adapters: %s)\n",
+	_, _ = fmt.Fprintf(os.Stdout, "Config %s is valid (detector: %s, adapters: %s)\n",
 		viper.ConfigFileUsed(), cfg.Detector.Type, strings.Join(cfg.Adapters, ", "))
 	return nil
 }

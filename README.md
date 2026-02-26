@@ -31,10 +31,12 @@ pgcdc is the only single-binary CDC tool combining multi-source capture, a built
 | | pgcdc | Debezium | Sequin | Conduit |
 |--|-------|----------|--------|---------|
 | Single binary | Yes | No (JVM+Kafka) | No (managed) | Yes |
-| Memory (idle) | ~12 MB | ~500 MB+ | N/A | ~50 MB |
+| Memory (idle) | **15 MB** | 288 MB | N/A | ~50 MB |
+| Throughput | **195K events/sec** | 2.5K events/sec | N/A | N/A |
+| Latency (p50) | **2.4 ms** | 654 ms | N/A | N/A |
 | PG/MySQL/MongoDB | Yes | Generic | Yes | Generic |
 | Built-in pgvector sync | Yes | No | No | No |
-| Smart embedding skip (unchanged cols) | Yes | No | No | No |
+| Smart embedding skip | Yes | No | No | No |
 | Kafka wire protocol server | Yes | No | No | No |
 | Streaming SQL views | Yes | No | No | No |
 | SSE/WS/gRPC streaming | Yes | No | HTTP only | No |
@@ -45,6 +47,32 @@ pgcdc is the only single-binary CDC tool combining multi-source capture, a built
 | Debezium-compatible output | Yes | Native | No | No |
 | Wasm plugin system | Yes | No | No | Go plugins |
 | External deps | 0 | Kafka+ZK | Managed | 0 |
+
+### Benchmarks (pgcdc vs Debezium Server)
+
+Automated, reproducible benchmarks running both tools against the same PostgreSQL 16 instance with testcontainers. pgcdc runs in-process (Go); Debezium Server 2.5 runs in a JVM container with HTTP sink. Apple M2 Max, 16 GB RAM.
+
+| Metric | pgcdc | Debezium Server | Factor |
+|--------|------:|----------------:|-------:|
+| **Startup to first event** | 2.1 s | 2.9 s | 1.4x faster |
+| **Memory at idle** | 15 MB | 288 MB | **19x less** |
+| **Throughput** (10K rows) | 195,008 events/sec | 2,502 events/sec | **78x faster** |
+| **Latency p50** | 2.4 ms | 654 ms | **273x lower** |
+| **Latency p99** | 4.7 ms | 941 ms | **200x lower** |
+
+<details>
+<summary>Reproduce these results</summary>
+
+```bash
+make bench-debezium  # requires Docker, ~1-2 min
+```
+
+Or run pgcdc-only benchmarks (no Debezium container):
+```bash
+./bench/run.sh       # throughput, latency, memory
+```
+
+</details>
 
 ## 5-Minute Demo
 
