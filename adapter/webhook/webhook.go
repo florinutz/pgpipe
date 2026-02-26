@@ -179,10 +179,8 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 						a.logger.Error("dlq record failed", "error", dlqErr)
 					}
 				}
-			} else {
-				if a.cb != nil {
-					a.cb.RecordSuccess()
-				}
+			} else if a.cb != nil {
+				a.cb.RecordSuccess()
 			}
 			if span != nil {
 				span.End()

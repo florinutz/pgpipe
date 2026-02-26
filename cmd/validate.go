@@ -92,22 +92,162 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			message:   "no adapters configured",
 		})
 	}
-	externalAdapters := map[string]bool{
-		"webhook": true, "embedding": true, "kafka": true, "nats": true,
-		"search": true, "redis": true, "pg_table": true, "s3": true,
-	}
 	for _, name := range adapters {
-		if externalAdapters[name] {
+		switch name {
+		case "webhook":
+			if cfg.Webhook.URL == "" {
+				results = append(results, validationResult{
+					component: "adapter/webhook",
+					status:    "FAIL",
+					message:   "webhook.url is required",
+				})
+				hasFailure = true
+			} else {
+				results = append(results, validationResult{
+					component: "adapter/webhook",
+					status:    "OK",
+					message:   fmt.Sprintf("url=%s", cfg.Webhook.URL),
+				})
+			}
+		case "embedding":
+			switch {
+			case cfg.Embedding.APIURL == "":
+				results = append(results, validationResult{
+					component: "adapter/embedding",
+					status:    "FAIL",
+					message:   "embedding.api_url is required",
+				})
+				hasFailure = true
+			case len(cfg.Embedding.Columns) == 0:
+				results = append(results, validationResult{
+					component: "adapter/embedding",
+					status:    "FAIL",
+					message:   "embedding.columns must not be empty",
+				})
+				hasFailure = true
+			default:
+				results = append(results, validationResult{
+					component: "adapter/embedding",
+					status:    "OK",
+					message:   fmt.Sprintf("api_url=%s columns=%v", cfg.Embedding.APIURL, cfg.Embedding.Columns),
+				})
+			}
+		case "kafka":
+			if len(cfg.Kafka.Brokers) == 0 {
+				results = append(results, validationResult{
+					component: "adapter/kafka",
+					status:    "FAIL",
+					message:   "kafka.brokers must not be empty",
+				})
+				hasFailure = true
+			} else {
+				results = append(results, validationResult{
+					component: "adapter/kafka",
+					status:    "OK",
+					message:   fmt.Sprintf("brokers=%v", cfg.Kafka.Brokers),
+				})
+			}
+		case "nats":
+			if cfg.Nats.URL == "" {
+				results = append(results, validationResult{
+					component: "adapter/nats",
+					status:    "FAIL",
+					message:   "nats.url is required",
+				})
+				hasFailure = true
+			} else {
+				results = append(results, validationResult{
+					component: "adapter/nats",
+					status:    "OK",
+					message:   fmt.Sprintf("url=%s", cfg.Nats.URL),
+				})
+			}
+		case "search":
+			if cfg.Search.URL == "" {
+				results = append(results, validationResult{
+					component: "adapter/search",
+					status:    "FAIL",
+					message:   "search.url is required",
+				})
+				hasFailure = true
+			} else {
+				results = append(results, validationResult{
+					component: "adapter/search",
+					status:    "OK",
+					message:   fmt.Sprintf("engine=%s url=%s", cfg.Search.Engine, cfg.Search.URL),
+				})
+			}
+		case "redis":
+			if cfg.Redis.URL == "" {
+				results = append(results, validationResult{
+					component: "adapter/redis",
+					status:    "FAIL",
+					message:   "redis.url is required",
+				})
+				hasFailure = true
+			} else {
+				results = append(results, validationResult{
+					component: "adapter/redis",
+					status:    "OK",
+					message:   fmt.Sprintf("url=%s mode=%s", cfg.Redis.URL, cfg.Redis.Mode),
+				})
+			}
+		case "s3":
+			if cfg.S3.Bucket == "" {
+				results = append(results, validationResult{
+					component: "adapter/s3",
+					status:    "FAIL",
+					message:   "s3.bucket is required",
+				})
+				hasFailure = true
+			} else {
+				results = append(results, validationResult{
+					component: "adapter/s3",
+					status:    "OK",
+					message:   fmt.Sprintf("bucket=%s format=%s", cfg.S3.Bucket, cfg.S3.Format),
+				})
+			}
+		case "pg_table":
 			results = append(results, validationResult{
-				component: fmt.Sprintf("adapter/%s", name),
+				component: "adapter/pg_table",
 				status:    "OK",
-				message:   "configured (use pipeline startup for deep validation)",
+				message:   fmt.Sprintf("table=%s", cfg.PGTable.Table),
 			})
-		} else {
+		case "file":
+			if cfg.File.Path == "" {
+				results = append(results, validationResult{
+					component: "adapter/file",
+					status:    "FAIL",
+					message:   "file.path is required",
+				})
+				hasFailure = true
+			} else {
+				results = append(results, validationResult{
+					component: "adapter/file",
+					status:    "OK",
+					message:   fmt.Sprintf("path=%s", cfg.File.Path),
+				})
+			}
+		case "exec":
+			if cfg.Exec.Command == "" {
+				results = append(results, validationResult{
+					component: "adapter/exec",
+					status:    "FAIL",
+					message:   "exec.command is required",
+				})
+				hasFailure = true
+			} else {
+				results = append(results, validationResult{
+					component: "adapter/exec",
+					status:    "OK",
+					message:   fmt.Sprintf("command=%s", cfg.Exec.Command),
+				})
+			}
+		default:
 			results = append(results, validationResult{
 				component: fmt.Sprintf("adapter/%s", name),
 				status:    "OK",
-				message:   "configured (no external dependencies)",
+				message:   "configured",
 			})
 		}
 	}
@@ -132,6 +272,48 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			component: fmt.Sprintf("detector/%s", detectorType),
 			status:    "OK",
 			message:   "configured",
+		})
+	}
+
+	// Check detector feature compatibility.
+	if cfg.Detector.Type != "wal" {
+		walFeatures := []struct {
+			name    string
+			enabled bool
+		}{
+			{"tx-metadata", cfg.Detector.TxMetadata},
+			{"tx-markers", cfg.Detector.TxMarkers},
+			{"include-schema", cfg.Detector.IncludeSchema},
+			{"schema-events", cfg.Detector.SchemaEvents},
+			{"toast-cache", cfg.Detector.ToastCache},
+			{"snapshot-first", cfg.Detector.SnapshotFirst},
+			{"persistent-slot", cfg.Detector.PersistentSlot},
+			{"cooperative-checkpoint", cfg.Detector.CooperativeCheckpoint},
+			{"incremental-snapshot", cfg.Detector.IncrementalSnapshot},
+			{"backpressure", cfg.Detector.BackpressureEnabled},
+		}
+		for _, f := range walFeatures {
+			if f.enabled {
+				results = append(results, validationResult{
+					component: fmt.Sprintf("feature/%s", f.name),
+					status:    "WARN",
+					message:   "requires --detector wal",
+				})
+			}
+		}
+	}
+	if cfg.Detector.CooperativeCheckpoint && !cfg.Detector.PersistentSlot {
+		results = append(results, validationResult{
+			component: "feature/cooperative-checkpoint",
+			status:    "WARN",
+			message:   "requires --persistent-slot",
+		})
+	}
+	if cfg.Detector.BackpressureEnabled && !cfg.Detector.PersistentSlot {
+		results = append(results, validationResult{
+			component: "feature/backpressure",
+			status:    "WARN",
+			message:   "requires --persistent-slot",
 		})
 	}
 

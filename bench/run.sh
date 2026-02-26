@@ -29,4 +29,11 @@ echo "--- Memory ---"
 go test -tags=integration -bench=BenchmarkMemory -benchtime=1x -timeout=5m -count=1 ./bench/ 2>/dev/null
 
 echo ""
+
+if [ "${1:-}" = "--debezium" ]; then
+    echo "--- Debezium Comparison ---"
+    go test -tags=debezium -bench=BenchmarkComparison -benchtime=1x -timeout=15m -count=1 ./bench/ 2>/dev/null
+    echo ""
+fi
+
 echo "=== Done ==="
