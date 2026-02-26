@@ -39,6 +39,7 @@ type Config struct {
 	MongoDB             MongoDBConfig             `mapstructure:"mongodb"`
 	OTel                OTelConfig                `mapstructure:"otel"`
 	KafkaServer         KafkaServerConfig         `mapstructure:"kafkaserver"`
+	Views               []ViewConfig              `mapstructure:"views"`
 }
 
 type OTelConfig struct {
@@ -338,6 +339,13 @@ type KafkaServerConfig struct {
 	SessionTimeout time.Duration `mapstructure:"session_timeout"`
 	CheckpointDB   string        `mapstructure:"checkpoint_db"`
 	KeyColumn      string        `mapstructure:"key_column"`
+}
+
+type ViewConfig struct {
+	Name      string `mapstructure:"name"`
+	Query     string `mapstructure:"query"`
+	Emit      string `mapstructure:"emit"`       // "row" (default) or "batch"
+	MaxGroups int    `mapstructure:"max_groups"` // default 100000
 }
 
 type EncodingConfig struct {

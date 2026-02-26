@@ -44,6 +44,7 @@ Each scenario = one file, one user journey, happy path + one critical failure.
 | 38 | MongoDB change streams | `mongodb_test.go` | MongoDB change stream captures INSERT/UPDATE/DELETE from MongoDB 7.0 replica set; events have correct channel (`pgcdc:db.coll`), operation, payload with row/document_key, source=`mongodb_changestream` | Resume after disconnect: stop detector, insert while down, restart, verify missed event arrives via resume token |
 | 39 | TOAST column cache | `toast_cache_test.go` | WAL replication with REPLICA IDENTITY DEFAULT + TOAST cache: INSERT large text, UPDATE different column, verify UPDATE event has full text resolved from cache (no `_unchanged_toast_columns`) | Cache miss: pipeline starts after INSERT, UPDATE emits `_unchanged_toast_columns` metadata with `description` column and null value |
 | 40 | Kafka protocol server | `kafkaserver_test.go` | NOTIFY → detector → bus → kafkaserver adapter: franz-go client connects via Kafka wire protocol, discovers topic, reads event with correct key/headers; RecordBatch v2 encoding with pgcdc-channel + pgcdc-event-id headers | Consumer group rebalance: two franz-go consumers share group, both connect without crash, post-rebalance event delivered to one consumer |
+| 41 | View adapter | `view_test.go` | WAL → detector → bus → view engine aggregates events via streaming SQL (tumbling window, GROUP BY, COUNT/SUM) → `VIEW_RESULT` events re-injected on `pgcdc:_view:<name>` channel | Batch emit mode: single event contains all group results as rows array |
 
 ## Adding a new scenario
 

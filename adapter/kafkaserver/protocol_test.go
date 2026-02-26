@@ -210,7 +210,7 @@ func TestReadRequestFlexibleHeader(t *testing.T) {
 	//                + compact_nullable_string client_id + tagged_fields(varint 0)
 	var frame bytes.Buffer
 
-	var payload []byte
+	payload := make([]byte, 0, 29)
 	// apiKey = 18
 	payload = append(payload, 0, 18)
 	// version = 3

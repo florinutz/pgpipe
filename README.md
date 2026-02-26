@@ -7,7 +7,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/florinutz/pgcdc.svg)](https://pkg.go.dev/github.com/florinutz/pgcdc)
 
-16 adapters | 5 detectors | PostgreSQL + MySQL + MongoDB | Persistent slots | Dead letter queue | Event routing | Zero infrastructure
 
 ```bash
 go install github.com/florinutz/pgcdc/cmd/pgcdc@latest
@@ -20,7 +19,7 @@ MongoDB    ──▶  • LISTEN/NOTIFY             NATS JetStream, Kafka, S3
                 • WAL logical replication    Typesense / Meilisearch
                 • Outbox table polling       Redis cache invalidation
                 • MySQL binlog               pgvector embeddings
-                • MongoDB Change Streams
+                • MongoDB Change Streams     Streaming SQL views
 ```
 
 ## Why pgcdc?
@@ -125,6 +124,7 @@ pgcdc listen --detector mongodb \
 | **s3** | `-a s3 --s3-bucket <name>` | Flush to S3-compatible storage (JSON Lines/Parquet). |
 | **iceberg** | `-a iceberg --iceberg-warehouse <path>` | Apache Iceberg table writes. |
 | **kafkaserver** | `-a kafkaserver --kafkaserver-addr :9092` | Kafka wire protocol server. Any Kafka consumer connects directly — no Kafka cluster needed. Channels become topics, N partitions, consumer groups. |
+| **view** | `-a view` (or `views:` YAML) | Streaming SQL over CDC events. Tumbling windows, GROUP BY, COUNT/SUM/AVG/MIN/MAX with HAVING. Results re-injected as `VIEW_RESULT` events. |
 
 Use multiple adapters: `-a stdout -a webhook -a redis`
 

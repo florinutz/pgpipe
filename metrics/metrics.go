@@ -479,6 +479,39 @@ var (
 		Help: "Current buffer usage per topic/partition.",
 	}, []string{"topic", "partition"})
 
+	// View adapter metrics.
+
+	ViewWindowsEmitted = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_view_windows_emitted_total",
+		Help: "Total number of view result events emitted.",
+	}, []string{"view"})
+
+	ViewEventsProcessed = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_view_events_processed_total",
+		Help: "Total number of events processed by views.",
+	}, []string{"view"})
+
+	ViewWindowDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "pgcdc_view_window_duration_seconds",
+		Help:    "Duration of view window flush operations.",
+		Buckets: []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1},
+	}, []string{"view"})
+
+	ViewGroups = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pgcdc_view_groups",
+		Help: "Number of groups in the last window flush.",
+	}, []string{"view"})
+
+	ViewTypeErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_view_type_errors_total",
+		Help: "Total number of type coercion errors in view aggregation.",
+	}, []string{"view"})
+
+	ViewGroupsOverflow = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_view_groups_overflow_total",
+		Help: "Total events dropped due to group cardinality exceeding max_groups.",
+	}, []string{"view"})
+
 	// Config reload metrics.
 
 	ConfigReloads = promauto.NewCounter(prometheus.CounterOpts{
