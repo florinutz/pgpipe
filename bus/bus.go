@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/metrics"
@@ -21,13 +22,19 @@ const (
 )
 
 // FilterFunc returns true if the event should be delivered to the subscriber.
+// Used by wrapper goroutines for route filtering (not by the bus dispatch loop).
 type FilterFunc func(event.Event) bool
 
 // subscriber pairs a channel with its adapter name for metrics labeling.
 type subscriber struct {
-	ch     chan event.Event
-	name   string
-	filter FilterFunc
+	ch   chan event.Event
+	name string
+}
+
+// subscriberList is an immutable snapshot of subscribers, stored in an
+// atomic.Pointer to eliminate mutex acquisition on the hot dispatch path.
+type subscriberList struct {
+	subs []subscriber
 }
 
 // Bus receives events on an ingest channel and fans them out to all subscriber
@@ -35,13 +42,13 @@ type subscriber struct {
 // warning log rather than blocking the pipeline (fast mode), or block the
 // detector until space is available (reliable mode).
 type Bus struct {
-	ingest      chan event.Event
-	subscribers []subscriber
-	bufferSize  int
-	mode        BusMode
-	closed      bool
-	mu          sync.RWMutex
-	logger      *slog.Logger
+	ingest     chan event.Event
+	subsPtr    atomic.Pointer[subscriberList] // lock-free read on hot path
+	bufferSize int
+	mode       BusMode
+	closed     bool
+	mu         sync.Mutex // protects Subscribe/closeSubscribers (not hot path)
+	logger     *slog.Logger
 }
 
 // New creates a Bus with the given buffer size applied to every channel it
@@ -53,11 +60,13 @@ func New(bufferSize int, logger *slog.Logger) *Bus {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Bus{
+	b := &Bus{
 		ingest:     make(chan event.Event, bufferSize),
 		bufferSize: bufferSize,
 		logger:     logger,
 	}
+	b.subsPtr.Store(&subscriberList{})
+	return b
 }
 
 // SetMode sets the fan-out mode. Must be called before Start.
@@ -74,12 +83,6 @@ func (b *Bus) Ingest() chan<- event.Event {
 // receive-only. The name identifies the subscriber (typically the adapter name)
 // and is used for metrics labels. Returns an error if the bus has already been stopped.
 func (b *Bus) Subscribe(name string) (<-chan event.Event, error) {
-	return b.SubscribeWithFilter(name, nil)
-}
-
-// SubscribeWithFilter is like Subscribe but applies a filter to each event
-// before delivery. If filter is nil, all events are delivered.
-func (b *Bus) SubscribeWithFilter(name string, filter FilterFunc) (<-chan event.Event, error) {
 	ch := make(chan event.Event, b.bufferSize)
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -87,8 +90,15 @@ func (b *Bus) SubscribeWithFilter(name string, filter FilterFunc) (<-chan event.
 		close(ch)
 		return ch, pgcdcerr.ErrBusClosed
 	}
-	b.subscribers = append(b.subscribers, subscriber{ch: ch, name: name, filter: filter})
-	metrics.BusSubscribers.Set(float64(len(b.subscribers)))
+	// Copy-on-write: create a new slice with the added subscriber and
+	// atomically store it. The dispatch goroutine will pick it up on the
+	// next iteration without any lock.
+	old := b.subsPtr.Load()
+	newSubs := make([]subscriber, len(old.subs), len(old.subs)+1)
+	copy(newSubs, old.subs)
+	newSubs = append(newSubs, subscriber{ch: ch, name: name})
+	b.subsPtr.Store(&subscriberList{subs: newSubs})
+	metrics.BusSubscribers.Set(float64(len(newSubs)))
 	return ch, nil
 }
 
@@ -104,12 +114,10 @@ func (b *Bus) Start(ctx context.Context) error {
 			return ctx.Err()
 		case ev := <-b.ingest:
 			metrics.EventsReceived.Inc()
-			b.mu.RLock()
+			// Load the subscriber list atomically — no mutex on the hot path.
+			subs := b.subsPtr.Load().subs
 			if b.mode == BusModeReliable {
-				for _, sub := range b.subscribers {
-					if sub.filter != nil && !sub.filter(ev) {
-						continue
-					}
+				for _, sub := range subs {
 					select {
 					case sub.ch <- ev:
 					default:
@@ -118,17 +126,13 @@ func (b *Bus) Start(ctx context.Context) error {
 						select {
 						case sub.ch <- ev:
 						case <-ctx.Done():
-							b.mu.RUnlock()
 							b.closeSubscribers()
 							return ctx.Err()
 						}
 					}
 				}
 			} else {
-				for _, sub := range b.subscribers {
-					if sub.filter != nil && !sub.filter(ev) {
-						continue
-					}
+				for _, sub := range subs {
 					select {
 					case sub.ch <- ev:
 					default:
@@ -140,7 +144,6 @@ func (b *Bus) Start(ctx context.Context) error {
 					}
 				}
 			}
-			b.mu.RUnlock()
 		}
 	}
 }
@@ -153,9 +156,10 @@ func (b *Bus) closeSubscribers() {
 		return
 	}
 	b.closed = true
-	for _, sub := range b.subscribers {
+	subs := b.subsPtr.Load().subs
+	for _, sub := range subs {
 		close(sub.ch)
 	}
-	b.subscribers = nil
+	b.subsPtr.Store(&subscriberList{})
 	metrics.BusSubscribers.Set(0)
 }

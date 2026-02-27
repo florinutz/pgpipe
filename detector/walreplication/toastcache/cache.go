@@ -28,9 +28,9 @@ type entry struct {
 type Cache struct {
 	maxEntries int
 	items      map[key]*entry
-	relIndex   map[uint32][]*entry // secondary index for EvictRelation
-	head       *entry              // most recently used
-	tail       *entry              // least recently used
+	relIndex   map[uint32]map[string]struct{} // secondary index for EvictRelation (PK -> struct{})
+	head       *entry                         // most recently used
+	tail       *entry                         // least recently used
 	logger     *slog.Logger
 }
 
@@ -42,7 +42,7 @@ func New(maxEntries int, logger *slog.Logger) *Cache {
 	return &Cache{
 		maxEntries: maxEntries,
 		items:      make(map[key]*entry, maxEntries),
-		relIndex:   make(map[uint32][]*entry),
+		relIndex:   make(map[uint32]map[string]struct{}),
 		logger:     logger.With("component", "toast_cache"),
 	}
 }
@@ -99,7 +99,10 @@ func (c *Cache) Put(relationID uint32, pk string, row map[string]any) {
 
 	e := &entry{k: k, row: row}
 	c.items[k] = e
-	c.relIndex[relationID] = append(c.relIndex[relationID], e)
+	if c.relIndex[relationID] == nil {
+		c.relIndex[relationID] = make(map[string]struct{})
+	}
+	c.relIndex[relationID][pk] = struct{}{}
 	c.pushFront(e)
 	metrics.ToastCacheEntries.Set(float64(len(c.items)))
 }
@@ -128,23 +131,32 @@ func (c *Cache) Delete(relationID uint32, pk string) {
 // EvictRelation removes all cached entries for the given relation ID.
 // Used on schema change or TRUNCATE.
 func (c *Cache) EvictRelation(relationID uint32) {
-	entries := c.relIndex[relationID]
-	for _, e := range entries {
-		c.unlink(e)
-		delete(c.items, e.k)
-		metrics.ToastCacheEvictions.Inc()
+	pks := c.relIndex[relationID]
+	count := len(pks)
+	for pk := range pks {
+		k := key{RelationID: relationID, PK: pk}
+		if e, ok := c.items[k]; ok {
+			c.unlink(e)
+			delete(c.items, k)
+		}
 	}
 	delete(c.relIndex, relationID)
+	if count > 0 {
+		metrics.ToastCacheEvictions.Add(float64(count))
+	}
 	metrics.ToastCacheEntries.Set(float64(len(c.items)))
 }
 
 // EvictAll removes all entries from the cache.
 func (c *Cache) EvictAll() {
+	count := len(c.items)
 	for k := range c.items {
-		metrics.ToastCacheEvictions.Inc()
 		delete(c.items, k)
 	}
-	c.relIndex = make(map[uint32][]*entry)
+	if count > 0 {
+		metrics.ToastCacheEvictions.Add(float64(count))
+	}
+	c.relIndex = make(map[uint32]map[string]struct{})
 	c.head = nil
 	c.tail = nil
 	metrics.ToastCacheEntries.Set(0)
@@ -206,15 +218,11 @@ func (c *Cache) removeEntry(e *entry) {
 	delete(c.items, e.k)
 
 	// Remove from relIndex.
-	relEntries := c.relIndex[e.k.RelationID]
-	for i, re := range relEntries {
-		if re == e {
-			c.relIndex[e.k.RelationID] = append(relEntries[:i], relEntries[i+1:]...)
-			break
+	if pks, ok := c.relIndex[e.k.RelationID]; ok {
+		delete(pks, e.k.PK)
+		if len(pks) == 0 {
+			delete(c.relIndex, e.k.RelationID)
 		}
-	}
-	if len(c.relIndex[e.k.RelationID]) == 0 {
-		delete(c.relIndex, e.k.RelationID)
 	}
 	metrics.ToastCacheEntries.Set(float64(len(c.items)))
 }

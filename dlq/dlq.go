@@ -77,12 +77,13 @@ const defaultTable = "pgcdc_dead_letters"
 
 // PGTableDLQ writes failed events to a PostgreSQL table.
 type PGTableDLQ struct {
-	dbURL   string
-	table   string
-	conn    *pgx.Conn
-	logger  *slog.Logger
-	mu      sync.Mutex
-	created bool
+	dbURL     string
+	table     string
+	conn      *pgx.Conn
+	logger    *slog.Logger
+	mu        sync.Mutex
+	created   bool
+	insertSQL string // cached INSERT statement
 }
 
 // NewPGTableDLQ creates a DLQ backed by a PostgreSQL table. The table is
@@ -94,10 +95,12 @@ func NewPGTableDLQ(dbURL, table string, logger *slog.Logger) *PGTableDLQ {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	safeTable := pgx.Identifier{table}.Sanitize()
 	return &PGTableDLQ{
-		dbURL:  dbURL,
-		table:  table,
-		logger: logger,
+		dbURL:     dbURL,
+		table:     table,
+		logger:    logger,
+		insertSQL: fmt.Sprintf(`INSERT INTO %s (event_id, adapter, error, payload) VALUES ($1, $2, $3, $4)`, safeTable),
 	}
 }
 
@@ -158,9 +161,7 @@ func (d *PGTableDLQ) Record(ctx context.Context, ev event.Event, adapter string,
 		return fmt.Errorf("marshal event: %w", marshalErr)
 	}
 
-	safeTable := pgx.Identifier{d.table}.Sanitize()
-	sql := fmt.Sprintf(`INSERT INTO %s (event_id, adapter, error, payload) VALUES ($1, $2, $3, $4)`, safeTable)
-	if _, execErr := d.conn.Exec(ctx, sql, ev.ID, adapter, err.Error(), payload); execErr != nil {
+	if _, execErr := d.conn.Exec(ctx, d.insertSQL, ev.ID, adapter, err.Error(), payload); execErr != nil {
 		metrics.DLQErrors.Inc()
 		return fmt.Errorf("insert dlq record: %w", execErr)
 	}

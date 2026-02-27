@@ -379,20 +379,38 @@ type EncodingConfig struct {
 	SchemaRegistryPassword string `mapstructure:"schema_registry_password"`
 }
 
+// knownAdapters is the set of valid adapter names.
+var knownAdapters = map[string]bool{
+	"stdout": true, "webhook": true, "sse": true, "file": true,
+	"exec": true, "pg_table": true, "ws": true, "embedding": true,
+	"iceberg": true, "nats": true, "search": true, "redis": true,
+	"kafka": true, "kafkaserver": true, "s3": true, "grpc": true,
+	"view": true,
+}
+
 // Validate performs structural validation on the config.
 func (c Config) Validate() error {
 	var errs []string
 
 	// --- Top-level ---
+	if c.DatabaseURL == "" && c.Detector.Type != "mysql" && c.Detector.Type != "mongodb" {
+		errs = append(errs, "database_url is required")
+	}
 	if c.Bus.BufferSize <= 0 {
 		errs = append(errs, fmt.Sprintf("bus.buffer_size must be > 0, got %d", c.Bus.BufferSize))
 	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, "shutdown_timeout must be > 0")
 	}
+	if c.Detector.Type == "listen_notify" && len(c.Channels) == 0 {
+		errs = append(errs, "no channels specified for listen_notify detector")
+	}
 
 	adapterSet := make(map[string]bool, len(c.Adapters))
 	for _, a := range c.Adapters {
+		if !knownAdapters[a] {
+			errs = append(errs, fmt.Sprintf("unknown adapter %q", a))
+		}
 		adapterSet[a] = true
 	}
 	for name := range c.Routes {
@@ -443,6 +461,9 @@ func (c Config) Validate() error {
 	}
 
 	if adapterSet["pg_table"] {
+		if c.PGTable.URL == "" && c.DatabaseURL == "" {
+			errs = append(errs, "pg_table requires a database URL (pg_table.url or database_url)")
+		}
 		checkDur("pg_table.backoff_base", c.PGTable.BackoffBase)
 		checkDur("pg_table.backoff_cap", c.PGTable.BackoffCap)
 	}
@@ -483,6 +504,9 @@ func (c Config) Validate() error {
 		if c.Search.URL == "" {
 			errs = append(errs, "search.url is required")
 		}
+		if c.Search.Index == "" {
+			errs = append(errs, "search.index is required")
+		}
 		if c.Search.BatchSize <= 0 {
 			errs = append(errs, fmt.Sprintf("search.batch_size must be > 0, got %d", c.Search.BatchSize))
 		}
@@ -513,6 +537,15 @@ func (c Config) Validate() error {
 	}
 
 	if adapterSet["iceberg"] {
+		if c.Iceberg.Warehouse == "" {
+			errs = append(errs, "iceberg.warehouse is required")
+		}
+		if c.Iceberg.Table == "" {
+			errs = append(errs, "iceberg.table is required")
+		}
+		if c.Iceberg.Mode == "upsert" && len(c.Iceberg.PrimaryKeys) == 0 {
+			errs = append(errs, "iceberg upsert mode requires primary_keys")
+		}
 		checkDur("iceberg.flush_interval", c.Iceberg.FlushInterval)
 		checkDur("iceberg.backoff_base", c.Iceberg.BackoffBase)
 		checkDur("iceberg.backoff_cap", c.Iceberg.BackoffCap)
@@ -575,6 +608,16 @@ func (c Config) Validate() error {
 				"backpressure.critical_threshold (%d) must be > warn_threshold (%d)",
 				c.Backpressure.CriticalThreshold, c.Backpressure.WarnThreshold))
 		}
+	}
+
+	// --- WAL publication ---
+	if c.Detector.Type == "wal" && c.Detector.Publication == "" {
+		errs = append(errs, "WAL detector requires a publication")
+	}
+
+	// --- Snapshot-first requires snapshot table ---
+	if c.Detector.SnapshotFirst && c.Snapshot.Table == "" {
+		errs = append(errs, "snapshot-first requires a snapshot table")
 	}
 
 	// --- Detector-feature compatibility ---

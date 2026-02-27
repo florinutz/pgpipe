@@ -41,6 +41,9 @@ type SelectItem struct {
 	// Field is the column reference inside the aggregate (e.g. "payload.amount").
 	// Empty for COUNT(*).
 	Field string
+	// ParsedPath is the pre-split dotted path for nested field resolution.
+	// Populated at parse time to avoid per-event strings.Split allocations.
+	ParsedPath []string
 	// Alias is the output name (e.g. "order_count").
 	Alias string
 	// IsGroupKey is true when this select item is a plain group-by column reference.
@@ -58,7 +61,8 @@ type ViewDef struct {
 	SelectItems     []SelectItem
 	FromTable       string // must be "pgcdc_events"
 	Where           Predicate
-	GroupBy         []string // field names
+	GroupBy         []string   // field names
+	GroupByParsed   [][]string // pre-split dotted paths for each GroupBy field
 	Having          Predicate
 	WindowSize      time.Duration
 	WindowType      WindowType

@@ -1,11 +1,17 @@
 package encoding
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/hamba/avro/v2"
+)
 
 // SchemaCacheEntry holds a cached Avro schema and its optional registry ID.
 type SchemaCacheEntry struct {
-	Schema     string // JSON Avro schema
-	RegistryID int    // Schema Registry ID; 0 if not registered
+	Schema      string      // JSON Avro schema
+	Parsed      avro.Schema // Pre-parsed Avro schema (avoids re-parsing on every encode)
+	RegistryID  int         // Schema Registry ID; 0 if not registered
+	ColumnsHash string      // Cached hash of columns used to generate this schema
 }
 
 // SchemaCache is a thread-safe cache for generated Avro schemas, keyed by

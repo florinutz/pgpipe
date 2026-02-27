@@ -97,7 +97,12 @@ func (s *PGStore) Load(ctx context.Context, slotName string) (uint64, error) {
 }
 
 // Save persists the current LSN for the given slot using an upsert.
+// Skips the write if the LSN is unchanged since the last successful save.
 func (s *PGStore) Save(ctx context.Context, slotName string, lsn uint64) error {
+	if lsn == s.lastSavedLSN {
+		return nil
+	}
+
 	if err := s.ensureTable(ctx); err != nil {
 		return err
 	}

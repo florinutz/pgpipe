@@ -97,6 +97,7 @@ func Parse(name, query string, emit EmitMode, maxGroups int) (*ViewDef, error) {
 				return nil, fmt.Errorf("unsupported GROUP BY expression")
 			}
 			vd.GroupBy = append(vd.GroupBy, field)
+			vd.GroupByParsed = append(vd.GroupByParsed, parseDottedPath(field))
 		}
 	}
 
@@ -265,9 +266,10 @@ func parseSelectField(field *ast.SelectField, groupBy []string) (SelectItem, err
 		}
 
 		return SelectItem{
-			Aggregate: &aggFunc,
-			Field:     innerField,
-			Alias:     alias,
+			Aggregate:  &aggFunc,
+			Field:      innerField,
+			ParsedPath: parseDottedPath(innerField),
+			Alias:      alias,
 		}, nil
 	}
 
@@ -277,10 +279,11 @@ func parseSelectField(field *ast.SelectField, groupBy []string) (SelectItem, err
 		return SelectItem{}, fmt.Errorf("unsupported SELECT expression")
 	}
 
+	parsed := parseDottedPath(fieldName)
+
 	if alias == "" {
 		// Use the last part as alias.
-		parts := strings.Split(fieldName, ".")
-		alias = parts[len(parts)-1]
+		alias = parsed[len(parsed)-1]
 	}
 
 	isGroupKey := false
@@ -293,6 +296,7 @@ func parseSelectField(field *ast.SelectField, groupBy []string) (SelectItem, err
 
 	return SelectItem{
 		Field:      fieldName,
+		ParsedPath: parsed,
 		Alias:      alias,
 		IsGroupKey: isGroupKey,
 	}, nil
@@ -666,6 +670,15 @@ func compilePatternIn(e *ast.PatternInExpr) (Predicate, error) {
 		}
 		return found
 	}, nil
+}
+
+// parseDottedPath splits a field name into its dot-separated components
+// at parse time, avoiding per-event strings.Split allocations.
+func parseDottedPath(field string) []string {
+	if field == "" {
+		return nil
+	}
+	return strings.Split(field, ".")
 }
 
 // likeToRegex converts a SQL LIKE pattern to a compiled regexp.

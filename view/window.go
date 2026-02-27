@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -90,7 +89,7 @@ func (tw *TumblingWindow) Add(meta EventMeta, payload map[string]any) {
 	defer tw.mu.Unlock()
 
 	// Build group key.
-	groupKey, keyValues := tw.buildGroupKey(meta, payload)
+	groupKey, keyValues := buildGroupKey(tw.def.GroupBy, tw.def.GroupByParsed, meta, payload)
 
 	// Check if this event belongs to a closed window (late event handling).
 	if tw.def.AllowedLateness > 0 {
@@ -151,7 +150,7 @@ func (tw *TumblingWindow) addToGroupState(gs *groupState, meta EventMeta, payloa
 		}
 		var val any
 		if si.Field != "" {
-			val = resolveField(si.Field, meta, payload)
+			val = resolveFieldParsed(si.Field, si.ParsedPath, meta, payload)
 		} else if *si.Aggregate == AggCount {
 			// COUNT(*): always count — use non-nil sentinel.
 			val = true
@@ -298,23 +297,6 @@ func (tw *TumblingWindow) emitGroups(groups map[string]*groupState, windowStart,
 	}
 
 	return events
-}
-
-// buildGroupKey constructs a group key string and the key values map.
-func (tw *TumblingWindow) buildGroupKey(meta EventMeta, payload map[string]any) (string, map[string]any) {
-	if len(tw.def.GroupBy) == 0 {
-		// Global aggregation — single implicit group.
-		return "_global_", nil
-	}
-
-	keyValues := make(map[string]any, len(tw.def.GroupBy))
-	var parts []string
-	for _, field := range tw.def.GroupBy {
-		val := resolveField(field, meta, payload)
-		keyValues[field] = val
-		parts = append(parts, fmt.Sprintf("%v", val))
-	}
-	return strings.Join(parts, "\x00"), keyValues
 }
 
 // buildRow constructs the output row for a group.

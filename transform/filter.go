@@ -1,7 +1,6 @@
 package transform
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/florinutz/pgcdc/event"
@@ -9,13 +8,14 @@ import (
 
 // FilterExpression returns a transform that drops events where the predicate
 // returns false for the payload map. Non-object payloads pass through.
+// Benefits from Chain's payload cache when available.
 func FilterExpression(predicate func(map[string]any) bool) TransformFunc {
 	return func(ev event.Event) (event.Event, error) {
 		if len(ev.Payload) == 0 {
 			return ev, nil
 		}
-		var m map[string]any
-		if err := json.Unmarshal(ev.Payload, &m); err != nil {
+		m, ok := readPayload(ev)
+		if !ok {
 			// Not a JSON object — pass through.
 			return ev, nil
 		}

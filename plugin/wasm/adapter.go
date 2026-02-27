@@ -17,7 +17,7 @@ import (
 )
 
 // WasmAdapter wraps a Wasm plugin as an adapter.Adapter.
-// It also implements adapter.Acknowledger and pgcdc.DLQAware.
+// It also implements adapter.Acknowledger and adapter.DLQAware.
 type WasmAdapter struct {
 	name   string
 	plugin *extism.Plugin
