@@ -96,7 +96,11 @@ func (e *AvroEncoder) encodeTyped(ev event.Event, payload map[string]any, namesp
 		if err != nil {
 			return nil, fmt.Errorf("generate avro schema: %w", err)
 		}
-		entry = SchemaCacheEntry{Schema: schemaJSON}
+		parsed, err := avro.Parse(schemaJSON)
+		if err != nil {
+			return nil, fmt.Errorf("parse avro schema: %w", err)
+		}
+		entry = SchemaCacheEntry{Schema: schemaJSON, Parsed: parsed}
 
 		if e.registry != nil {
 			subject := topicForEvent(ev) + "-value"
@@ -112,16 +116,11 @@ func (e *AvroEncoder) encodeTyped(ev event.Event, payload map[string]any, namesp
 		e.cache.Put(cacheKey, entry)
 	}
 
-	parsed, err := avro.Parse(entry.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("parse avro schema: %w", err)
-	}
-
 	// Prepare data: extract the row data, coerce types for Avro.
 	rowData := extractRowData(payload)
 	record := coerceForAvro(rowData, columns)
 
-	encoded, err := avro.Marshal(parsed, record)
+	encoded, err := avro.Marshal(entry.Parsed, record)
 	if err != nil {
 		return nil, fmt.Errorf("avro marshal: %w", err)
 	}
@@ -157,7 +156,11 @@ func (e *AvroEncoder) encodeDebezium(ev event.Event, payload map[string]any) ([]
 		if err != nil {
 			return nil, fmt.Errorf("generate debezium avro schema: %w", err)
 		}
-		entry = SchemaCacheEntry{Schema: schemaJSON}
+		parsed, err := avro.Parse(schemaJSON)
+		if err != nil {
+			return nil, fmt.Errorf("parse debezium avro schema: %w", err)
+		}
+		entry = SchemaCacheEntry{Schema: schemaJSON, Parsed: parsed}
 
 		if e.registry != nil {
 			subject := topicForEvent(ev) + "-value"
@@ -173,14 +176,9 @@ func (e *AvroEncoder) encodeDebezium(ev event.Event, payload map[string]any) ([]
 		e.cache.Put(cacheKey, entry)
 	}
 
-	parsed, err := avro.Parse(entry.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("parse debezium avro schema: %w", err)
-	}
-
 	record := coerceDebeziumForAvro(payload, columns)
 
-	encoded, err := avro.Marshal(parsed, record)
+	encoded, err := avro.Marshal(entry.Parsed, record)
 	if err != nil {
 		return nil, fmt.Errorf("avro marshal debezium: %w", err)
 	}
@@ -203,7 +201,11 @@ func (e *AvroEncoder) encodeOpaque(ev event.Event, data []byte) ([]byte, error) 
 		if err != nil {
 			return nil, fmt.Errorf("generate opaque schema: %w", err)
 		}
-		entry = SchemaCacheEntry{Schema: schemaJSON}
+		parsed, err := avro.Parse(schemaJSON)
+		if err != nil {
+			return nil, fmt.Errorf("parse opaque schema: %w", err)
+		}
+		entry = SchemaCacheEntry{Schema: schemaJSON, Parsed: parsed}
 
 		if e.registry != nil {
 			subject := topicForEvent(ev) + "-value"
@@ -219,13 +221,8 @@ func (e *AvroEncoder) encodeOpaque(ev event.Event, data []byte) ([]byte, error) 
 		e.cache.Put(cacheKey, entry)
 	}
 
-	parsed, err := avro.Parse(entry.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("parse opaque schema: %w", err)
-	}
-
 	record := map[string]any{"payload": data}
-	encoded, err := avro.Marshal(parsed, record)
+	encoded, err := avro.Marshal(entry.Parsed, record)
 	if err != nil {
 		return nil, fmt.Errorf("avro marshal opaque: %w", err)
 	}
@@ -255,19 +252,40 @@ func isDebeziumEnvelope(payload map[string]any) bool {
 }
 
 // extractColumns extracts column metadata from the payload's "columns" field
-// (added by --include-schema).
+// (added by --include-schema). Uses direct type assertion instead of
+// marshal/unmarshal roundtrip.
 func extractColumns(payload map[string]any) []ColumnInfo {
 	raw, ok := payload["columns"]
 	if !ok {
 		return nil
 	}
-	data, err := json.Marshal(raw)
-	if err != nil {
+	arr, ok := raw.([]any)
+	if !ok {
 		return nil
 	}
-	var cols []ColumnInfo
-	if err := json.Unmarshal(data, &cols); err != nil {
-		return nil
+	cols := make([]ColumnInfo, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ci := ColumnInfo{}
+		if name, ok := m["name"].(string); ok {
+			ci.Name = name
+		}
+		if oid, ok := m["type_oid"]; ok {
+			switch v := oid.(type) {
+			case float64:
+				ci.TypeOID = uint32(v)
+			case json.Number:
+				n, _ := v.Int64()
+				ci.TypeOID = uint32(n)
+			}
+		}
+		if typeName, ok := m["type_name"].(string); ok {
+			ci.TypeName = typeName
+		}
+		cols = append(cols, ci)
 	}
 	return cols
 }
@@ -281,15 +299,8 @@ func extractColumnsFromDebezium(payload map[string]any) []ColumnInfo {
 	}
 	// Check source.columns (some configurations).
 	if source, ok := payload["source"].(map[string]any); ok {
-		if raw, ok := source["columns"]; ok {
-			data, err := json.Marshal(raw)
-			if err != nil {
-				return nil
-			}
-			var cols []ColumnInfo
-			if err := json.Unmarshal(data, &cols); err != nil {
-				return nil
-			}
+		sourcePayload := map[string]any{"columns": source["columns"]}
+		if cols := extractColumns(sourcePayload); len(cols) > 0 {
 			return cols
 		}
 	}

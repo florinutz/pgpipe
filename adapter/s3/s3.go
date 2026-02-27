@@ -17,7 +17,7 @@ import (
 	"github.com/florinutz/pgcdc/adapter"
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 )
@@ -165,55 +165,29 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 		"flush_size", a.flushSize,
 	)
 
-	var attempt int
-	for {
-		if err := a.initClient(ctx); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+	// Init phase: retry client creation with backoff.
+	initErr := reconnect.Loop(ctx, "s3-init", a.backoffBase, a.backoffCap,
+		a.logger, nil,
+		func(ctx context.Context) error {
+			if err := a.initClient(ctx); err != nil {
+				return err
 			}
-			delay := backoff.Jitter(attempt, a.backoffBase, a.backoffCap)
-			a.logger.Error("s3 client init failed, retrying",
-				"error", err,
-				"attempt", attempt+1,
-				"delay", delay,
-			)
-			attempt++
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-				continue
-			}
-		}
-		break
+			return nil // success — exit loop
+		})
+	if initErr != nil {
+		return initErr
 	}
 
-	attempt = 0
-	for {
-		runErr := a.run(ctx, events)
-		if ctx.Err() != nil {
-			a.drainFlush()
-			return ctx.Err()
-		}
-		if runErr == nil {
-			return nil
-		}
-
-		delay := backoff.Jitter(attempt, a.backoffBase, a.backoffCap)
-		a.logger.Error("s3 flush cycle failed, retrying",
-			"error", runErr,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			a.drainFlush()
-			return ctx.Err()
-		case <-time.After(delay):
-		}
+	// Run phase: retry flush cycles with backoff.
+	err := reconnect.Loop(ctx, "s3", a.backoffBase, a.backoffCap,
+		a.logger, nil,
+		func(ctx context.Context) error {
+			return a.run(ctx, events)
+		})
+	if ctx.Err() != nil {
+		a.drainFlush()
 	}
+	return err
 }
 
 // initClient creates the S3 client with optional static credentials and custom endpoint.

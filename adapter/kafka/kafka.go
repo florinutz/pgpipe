@@ -21,9 +21,9 @@ import (
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/internal/circuitbreaker"
 	"github.com/florinutz/pgcdc/internal/ratelimit"
+	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/tracing"
@@ -34,6 +34,14 @@ import (
 )
 
 const adapterName = "kafka"
+
+// Pre-allocated header key constants to avoid per-event string construction.
+const (
+	headerKeyChannel     = "pgcdc-channel"
+	headerKeyOperation   = "pgcdc-operation"
+	headerKeyEventID     = "pgcdc-event-id"
+	headerKeyContentType = "content-type"
+)
 
 // Adapter publishes events to a Kafka topic.
 type Adapter struct {
@@ -49,12 +57,13 @@ type Adapter struct {
 	tracer        trace.Tracer
 	cb            *circuitbreaker.CircuitBreaker
 	limiter       *ratelimit.Limiter
+	topicCache    map[string]string
 }
 
 // SetTracer implements adapter.Traceable.
 func (a *Adapter) SetTracer(t trace.Tracer) { a.tracer = t }
 
-// SetDLQ implements pgcdc.DLQAware.
+// SetDLQ implements adapter.DLQAware.
 func (a *Adapter) SetDLQ(d dlq.DLQ) { a.dlqInstance = d }
 
 // SetAckFunc implements adapter.Acknowledger.
@@ -154,6 +163,7 @@ func New(
 		backoffCap:    backoffCap,
 		logger:        logger.With("adapter", adapterName),
 		limiter:       ratelimit.New(rateLimitVal, rateBurst, adapterName, logger),
+		topicCache:    make(map[string]string),
 	}
 	if cbMaxFailures > 0 {
 		a.cb = circuitbreaker.New(cbMaxFailures, cbResetTimeout, logger)
@@ -165,28 +175,11 @@ func New(
 // until ctx is cancelled. On connection error, it reconnects with exponential
 // backoff.
 func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
-	var attempt int
-	for {
-		err := a.run(ctx, events)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		delay := backoff.Jitter(attempt, a.backoffBase, a.backoffCap)
-		a.logger.Error("kafka connection lost, reconnecting",
-			"error", err,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		metrics.KafkaErrors.Add(1)
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
+	return reconnect.Loop(ctx, adapterName, a.backoffBase, a.backoffCap,
+		a.logger, metrics.KafkaErrors,
+		func(ctx context.Context) error {
+			return a.run(ctx, events)
+		})
 }
 
 func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
@@ -258,10 +251,10 @@ func (a *Adapter) handleEvent(ctx context.Context, client *kgo.Client, ev event.
 	}
 
 	headers := []kgo.RecordHeader{
-		{Key: "pgcdc-channel", Value: []byte(ev.Channel)},
-		{Key: "pgcdc-operation", Value: []byte(ev.Operation)},
-		{Key: "pgcdc-event-id", Value: []byte(ev.ID)},
-		{Key: "content-type", Value: []byte(contentType)},
+		{Key: headerKeyChannel, Value: []byte(ev.Channel)},
+		{Key: headerKeyOperation, Value: []byte(ev.Operation)},
+		{Key: headerKeyEventID, Value: []byte(ev.ID)},
+		{Key: headerKeyContentType, Value: []byte(contentType)},
 	}
 
 	// Create delivery span and inject trace context into Kafka headers.
@@ -377,11 +370,17 @@ func (a *Adapter) produceTransactional(ctx context.Context, client *kgo.Client, 
 // topicForEvent returns the Kafka topic for an event.
 // If a fixed topic is configured, it is always used.
 // Otherwise the channel is mapped: "pgcdc:orders" → "pgcdc.orders".
+// Results are cached since channel-to-topic mappings are deterministic.
 func (a *Adapter) topicForEvent(ev event.Event) string {
 	if a.topic != "" {
 		return a.topic
 	}
-	return strings.ReplaceAll(ev.Channel, ":", ".")
+	if t, ok := a.topicCache[ev.Channel]; ok {
+		return t
+	}
+	t := strings.ReplaceAll(ev.Channel, ":", ".")
+	a.topicCache[ev.Channel] = t
+	return t
 }
 
 // isTerminalError returns true if the error indicates a permanent failure that

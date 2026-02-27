@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 
+	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -51,4 +52,10 @@ type Drainer interface {
 // bus ingest channel before starting adapters.
 type Reinjector interface {
 	SetIngestChan(ch chan<- event.Event)
+}
+
+// DLQAware is implemented by adapters that can record failed events to a DLQ.
+// The pipeline injects a DLQ via SetDLQ when a DLQ backend is configured.
+type DLQAware interface {
+	SetDLQ(d dlq.DLQ)
 }

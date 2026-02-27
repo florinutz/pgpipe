@@ -439,7 +439,8 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 	clientXLogPos := consistentPoint
 	nextStatusDeadline := time.Now().Add(standbyStatusInterval)
 	relations := make(map[uint32]*pglogrepl.RelationMessage)
-	var currentTx *txState // non-nil during a transaction when txMetadata is enabled
+	channelNames := make(map[uint32]string) // cached channel name per relation
+	var currentTx *txState                  // non-nil during a transaction when txMetadata is enabled
 
 	for {
 		if time.Now().After(nextStatusDeadline) {
@@ -562,6 +563,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 					}
 				}
 				relations[m.RelationID] = m
+				channelNames[m.RelationID] = channelName(m)
 
 			case *pglogrepl.BeginMessage:
 				if d.txMetadata {
@@ -585,7 +587,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "INSERT", m.Tuple, nil, currentTx, clientXLogPos, tc); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, channelNames[m.RelationID], "INSERT", m.Tuple, nil, currentTx, clientXLogPos, tc); err != nil {
 					return err
 				}
 				if d.incrementalEnabled {
@@ -598,7 +600,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "UPDATE", m.NewTuple, m.OldTuple, currentTx, clientXLogPos, tc); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, channelNames[m.RelationID], "UPDATE", m.NewTuple, m.OldTuple, currentTx, clientXLogPos, tc); err != nil {
 					return err
 				}
 
@@ -606,7 +608,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				if currentTx != nil {
 					currentTx.seq++
 				}
-				if err := d.emitEvent(ctx, events, relations, m.RelationID, "DELETE", nil, m.OldTuple, currentTx, clientXLogPos, tc); err != nil {
+				if err := d.emitEvent(ctx, events, relations, m.RelationID, channelNames[m.RelationID], "DELETE", nil, m.OldTuple, currentTx, clientXLogPos, tc); err != nil {
 					return err
 				}
 
@@ -618,7 +620,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 					if currentTx != nil {
 						currentTx.seq++
 					}
-					if err := d.emitEvent(ctx, events, relations, relID, "TRUNCATE", nil, nil, currentTx, clientXLogPos, tc); err != nil {
+					if err := d.emitEvent(ctx, events, relations, relID, channelNames[relID], "TRUNCATE", nil, nil, currentTx, clientXLogPos, tc); err != nil {
 						return err
 					}
 				}
@@ -633,11 +635,13 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 // emitEvent builds an event from WAL data and sends it to the events channel.
 // currentLSN is the WAL position at which this change was received; it is
 // stored on the event for cooperative checkpointing. tc may be nil.
+// channel is the pre-computed channel name from channelNames cache.
 func (d *Detector) emitEvent(
 	ctx context.Context,
 	events chan<- event.Event,
 	relations map[uint32]*pglogrepl.RelationMessage,
 	relationID uint32,
+	channel string,
 	op string,
 	newTuple *pglogrepl.TupleData,
 	oldTuple *pglogrepl.TupleData,
@@ -650,8 +654,6 @@ func (d *Detector) emitEvent(
 		d.logger.Warn("unknown relation, skipping event", "relation_id", relationID)
 		return nil
 	}
-
-	channel := channelName(rel)
 
 	var row map[string]any
 	var unchangedCols []string

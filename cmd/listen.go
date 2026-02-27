@@ -521,143 +521,31 @@ func runListen(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown bus mode: %q (expected fast or reliable)", cfg.Bus.Mode)
 	}
 
-	// Validation.
-	if cfg.Detector.Type != "wal" && (cfg.Detector.TxMetadata || cfg.Detector.TxMarkers) {
-		return fmt.Errorf("--tx-metadata and --tx-markers require --detector wal")
-	}
-	if cfg.DatabaseURL == "" {
-		return fmt.Errorf("no database URL specified; use --db, set database_url in config, or export PGCDC_DATABASE_URL")
-	}
-	if cfg.Detector.Type == "listen_notify" && len(cfg.Channels) == 0 {
-		return fmt.Errorf("no channels specified; use --channel or set channels in config file")
-	}
-	if cfg.Detector.Type == "wal" && cfg.Detector.Publication == "" && !allTables {
-		return fmt.Errorf("WAL detector requires a publication; use --publication or set detector.publication in config")
-	}
-	if snapshotFirst && cfg.Detector.Type != "wal" {
-		return fmt.Errorf("--snapshot-first requires --detector wal")
-	}
-	if cooperativeCheckpoint && cfg.Detector.Type != "wal" {
-		return fmt.Errorf("--cooperative-checkpoint requires --detector wal")
-	}
-	if cooperativeCheckpoint && !persistentSlot {
-		return fmt.Errorf("--cooperative-checkpoint requires --persistent-slot")
-	}
-	if snapshotFirst && snapshotTable == "" {
-		return fmt.Errorf("--snapshot-first requires --snapshot-table")
-	}
-	if incrementalSnapshot && cfg.Detector.Type != "wal" {
-		return fmt.Errorf("--incremental-snapshot requires --detector wal")
-	}
-	if bpEnabled && cfg.Detector.Type != "wal" {
-		return fmt.Errorf("--backpressure requires --detector wal")
-	}
-	if bpEnabled && !persistentSlot {
-		return fmt.Errorf("--backpressure requires --persistent-slot")
-	}
-	if toastCache && cfg.Detector.Type != "wal" {
-		return fmt.Errorf("--toast-cache requires --detector wal")
+	// Propagate CLI-only flags into config struct for unified validation.
+	cfg.Detector.SnapshotFirst = snapshotFirst
+	cfg.Detector.ToastCache = toastCache
+	cfg.Detector.PersistentSlot = persistentSlot
+	cfg.Detector.IncludeSchema = includeSchema
+	cfg.Detector.SchemaEvents = schemaEvents
+	cfg.Detector.IncrementalSnapshot = incrementalSnapshot
+	cfg.Detector.CooperativeCheckpoint = cooperativeCheckpoint
+	cfg.Detector.BackpressureEnabled = bpEnabled
+	if snapshotTable != "" {
+		cfg.Snapshot.Table = snapshotTable
 	}
 
-	// Validate adapters and check requirements early.
-	hasWebhook := false
-	hasSSE := false
-	hasFile := false
-	hasExec := false
-	hasPGTable := false
-	hasWS := false
-	hasEmbedding := false
-	hasIceberg := false
-	hasNats := false
-	hasSearch := false
-	hasRedis := false
-	hasKafka := false
-	hasS3 := false
-	for _, name := range cfg.Adapters {
-		switch name {
-		case "stdout":
-			// ok
-		case "webhook":
-			hasWebhook = true
-		case "sse":
-			hasSSE = true
-		case "file":
-			hasFile = true
-		case "exec":
-			hasExec = true
-		case "pg_table":
-			hasPGTable = true
-		case "ws":
-			hasWS = true
-		case "embedding":
-			hasEmbedding = true
-		case "iceberg":
-			hasIceberg = true
-		case "nats":
-			hasNats = true
-		case "search":
-			hasSearch = true
-		case "redis":
-			hasRedis = true
-		case "kafka":
-			hasKafka = true
-		case "kafkaserver":
-			// kafkaserver adapter has no required config (addr has default).
-		case "s3":
-			hasS3 = true
-		case "grpc":
-			// gRPC adapter has no required config (addr has default).
-		case "view":
-			// view adapter is auto-created from views: config section.
-		default:
-			return fmt.Errorf("unknown adapter: %q (expected stdout, webhook, sse, file, exec, pg_table, ws, embedding, iceberg, nats, search, redis, kafka, kafkaserver, s3, grpc, or view)", name)
-		}
+	// Run unified config validation.
+	if err := cfg.Validate(); err != nil {
+		return err
 	}
-	if hasWebhook && cfg.Webhook.URL == "" {
-		return fmt.Errorf("webhook adapter requires a URL; use --url or set webhook.url in config")
+
+	// Build adapter set for later use (HTTP server setup, etc.).
+	adapterSet := make(map[string]bool, len(cfg.Adapters))
+	for _, a := range cfg.Adapters {
+		adapterSet[a] = true
 	}
-	if hasFile && cfg.File.Path == "" {
-		return fmt.Errorf("file adapter requires a path; use --file-path or set file.path in config")
-	}
-	if hasExec && cfg.Exec.Command == "" {
-		return fmt.Errorf("exec adapter requires a command; use --exec-command or set exec.command in config")
-	}
-	if hasPGTable && cfg.PGTable.URL == "" && cfg.DatabaseURL == "" {
-		return fmt.Errorf("pg_table adapter requires a database URL; use --db or --pg-table-url")
-	}
-	if hasEmbedding && cfg.Embedding.APIURL == "" {
-		return fmt.Errorf("embedding adapter requires an API URL; use --embedding-api-url or set embedding.api_url in config")
-	}
-	if hasEmbedding && len(cfg.Embedding.Columns) == 0 {
-		return fmt.Errorf("embedding adapter requires at least one column; use --embedding-columns or set embedding.columns in config")
-	}
-	if hasIceberg && cfg.Iceberg.Warehouse == "" {
-		return fmt.Errorf("iceberg adapter requires a warehouse; use --iceberg-warehouse or set iceberg.warehouse in config")
-	}
-	if hasIceberg && cfg.Iceberg.Table == "" {
-		return fmt.Errorf("iceberg adapter requires a table name; use --iceberg-table or set iceberg.table in config")
-	}
-	if hasIceberg && cfg.Iceberg.Mode == "upsert" && len(cfg.Iceberg.PrimaryKeys) == 0 {
-		return fmt.Errorf("iceberg upsert mode requires primary keys; use --iceberg-pk or set iceberg.primary_keys in config")
-	}
-	if hasNats && cfg.Nats.URL == "" {
-		return fmt.Errorf("nats adapter requires a URL; use --nats-url or set nats.url in config")
-	}
-	if hasSearch && cfg.Search.URL == "" {
-		return fmt.Errorf("search adapter requires a URL; use --search-url or set search.url in config")
-	}
-	if hasSearch && cfg.Search.Index == "" {
-		return fmt.Errorf("search adapter requires an index; use --search-index or set search.index in config")
-	}
-	if hasRedis && cfg.Redis.URL == "" {
-		return fmt.Errorf("redis adapter requires a URL; use --redis-url or set redis.url in config")
-	}
-	if hasKafka && len(cfg.Kafka.Brokers) == 0 {
-		return fmt.Errorf("kafka adapter requires at least one broker; use --kafka-brokers or set kafka.brokers in config")
-	}
-	if hasS3 && cfg.S3.Bucket == "" {
-		return fmt.Errorf("s3 adapter requires a bucket; use --s3-bucket or set s3.bucket in config")
-	}
+	hasSSE := adapterSet["sse"]
+	hasWS := adapterSet["ws"]
 
 	logger := slog.Default()
 

@@ -9,7 +9,7 @@ import (
 
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -86,31 +86,11 @@ func (a *Adapter) Validate(ctx context.Context) error {
 func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 	a.logger.Info("redis adapter started", "mode", a.mode, "key_prefix", a.keyPrefix)
 
-	var attempt int
-	for {
-		err := a.run(ctx, events)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err == nil {
-			return nil
-		}
-
-		delay := backoff.Jitter(attempt, a.backoffBase, a.backoffCap)
-		a.logger.Error("redis connection lost, reconnecting",
-			"error", err,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		metrics.RedisErrors.Inc()
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
+	return reconnect.Loop(ctx, "redis", a.backoffBase, a.backoffCap,
+		a.logger, metrics.RedisErrors,
+		func(ctx context.Context) error {
+			return a.run(ctx, events)
+		})
 }
 
 func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
@@ -236,7 +216,11 @@ func (a *Adapter) extractPayload(ev event.Event) (id string, row map[string]inte
 		return "", nil, isDel, nil
 	}
 	if v, ok := p.Row[a.idColumn]; ok && v != nil {
-		id = fmt.Sprintf("%v", v)
+		if s, ok := v.(string); ok {
+			id = s
+		} else {
+			id = fmt.Sprintf("%v", v)
+		}
 	}
 	return id, p.Row, isDel, p.UnchangedToast
 }

@@ -35,6 +35,12 @@ type Event struct {
 	Transaction *TransactionInfo  `json:"transaction,omitempty"`
 	LSN         uint64            `json:"-"` // WAL position; 0 for non-WAL sources and snapshot events
 	SpanContext trace.SpanContext `json:"-"` // Trace context; zero value when tracing disabled
+
+	// ParsedPayload is a transient cache used by transform.Chain to avoid
+	// repeated JSON unmarshal/marshal of the Payload across multiple transforms.
+	// It is never serialized and must not be relied upon outside the transform
+	// package. When non-nil, it holds a *transform.payloadCache (as any).
+	ParsedPayload any `json:"-"`
 }
 
 func New(channel, operation string, payload json.RawMessage, source string) (Event, error) {

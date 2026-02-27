@@ -40,6 +40,14 @@ type Detector struct {
 	backoffCap   time.Duration
 	logger       *slog.Logger
 	tracer       trace.Tracer
+
+	// Resume token debounce fields.
+	resumeTokenCount    int           // events since last save
+	resumeTokenLastSave time.Time     // time of last save
+	resumeTokenInterval time.Duration // configurable interval (default 5s)
+	resumeTokenBatch    int           // configurable batch size (default 100)
+	pendingResumeToken  bson.Raw      // latest token to save
+	pendingClient       *mongo.Client // client for flushing pending token
 }
 
 // New creates a MongoDB Change Streams detector.
@@ -77,16 +85,18 @@ func New(
 	}
 
 	return &Detector{
-		uri:          uri,
-		scope:        scope,
-		database:     database,
-		collections:  collections,
-		fullDocument: fullDocument,
-		metadataDB:   metadataDB,
-		metadataColl: metadataColl,
-		backoffBase:  backoffBase,
-		backoffCap:   backoffCap,
-		logger:       logger.With("detector", sourceName),
+		uri:                 uri,
+		scope:               scope,
+		database:            database,
+		collections:         collections,
+		fullDocument:        fullDocument,
+		metadataDB:          metadataDB,
+		metadataColl:        metadataColl,
+		backoffBase:         backoffBase,
+		backoffCap:          backoffCap,
+		logger:              logger.With("detector", sourceName),
+		resumeTokenInterval: 5 * time.Second,
+		resumeTokenBatch:    100,
 	}
 }
 
@@ -189,6 +199,13 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 		"collections", d.collections,
 	)
 
+	// Initialize resume token debounce state for this run cycle.
+	d.pendingClient = client
+	d.pendingResumeToken = nil
+	d.resumeTokenCount = 0
+	d.resumeTokenLastSave = time.Now()
+	defer d.flushResumeToken(ctx) // flush any pending token on exit
+
 	// Event loop.
 	for cs.Next(ctx) {
 		var changeDoc changeEvent
@@ -201,13 +218,11 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 			return err
 		}
 
-		// Persist resume token after each event.
+		// Debounce resume token persistence: save every N events or T seconds.
 		if token := cs.ResumeToken(); token != nil {
-			if err := d.saveResumeToken(ctx, client, token); err != nil {
-				d.logger.Warn("failed to save resume token", "error", err)
-			} else {
-				metrics.MongoDBResumeTokenSaves.Inc()
-			}
+			d.pendingResumeToken = token
+			d.resumeTokenCount++
+			d.maybeFlushResumeToken(ctx)
 		}
 	}
 
@@ -237,6 +252,32 @@ type changeEventNS struct {
 type updateDescription struct {
 	UpdatedFields map[string]interface{} `bson:"updatedFields"`
 	RemovedFields []string               `bson:"removedFields"`
+}
+
+// maybeFlushResumeToken checks if the pending resume token should be saved
+// based on event count or time interval, and saves it if so.
+func (d *Detector) maybeFlushResumeToken(ctx context.Context) {
+	if d.pendingResumeToken == nil {
+		return
+	}
+	if d.resumeTokenCount >= d.resumeTokenBatch || time.Since(d.resumeTokenLastSave) >= d.resumeTokenInterval {
+		d.flushResumeToken(ctx)
+	}
+}
+
+// flushResumeToken unconditionally saves the pending resume token.
+func (d *Detector) flushResumeToken(ctx context.Context) {
+	if d.pendingResumeToken == nil || d.pendingClient == nil {
+		return
+	}
+	if err := d.saveResumeToken(ctx, d.pendingClient, d.pendingResumeToken); err != nil {
+		d.logger.Warn("failed to save resume token", "error", err)
+	} else {
+		metrics.MongoDBResumeTokenSaves.Inc()
+	}
+	d.pendingResumeToken = nil
+	d.resumeTokenCount = 0
+	d.resumeTokenLastSave = time.Now()
 }
 
 // buildPipeline constructs the aggregation pipeline for filtering.

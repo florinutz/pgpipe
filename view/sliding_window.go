@@ -1,10 +1,7 @@
 package view
 
 import (
-	"encoding/json"
-	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -77,7 +74,7 @@ func (sw *SlidingWindow) Add(meta EventMeta, payload map[string]any) {
 
 	sub := sw.subWindows[sw.current]
 
-	groupKey, keyValues := sw.buildGroupKey(meta, payload)
+	groupKey, keyValues := buildGroupKey(sw.def.GroupBy, sw.def.GroupByParsed, meta, payload)
 
 	gs, ok := sub.groups[groupKey]
 	if !ok {
@@ -115,7 +112,7 @@ func (sw *SlidingWindow) Add(meta EventMeta, payload map[string]any) {
 		}
 		var val any
 		if si.Field != "" {
-			val = resolveField(si.Field, meta, payload)
+			val = resolveFieldParsed(si.Field, si.ParsedPath, meta, payload)
 		} else if *si.Aggregate == AggCount {
 			val = true
 		}
@@ -361,21 +358,6 @@ func mergeAggregator(dst, src Aggregator) {
 	}
 }
 
-func (sw *SlidingWindow) buildGroupKey(meta EventMeta, payload map[string]any) (string, map[string]any) {
-	if len(sw.def.GroupBy) == 0 {
-		return "_global_", nil
-	}
-
-	keyValues := make(map[string]any, len(sw.def.GroupBy))
-	var parts []string
-	for _, field := range sw.def.GroupBy {
-		val := resolveField(field, meta, payload)
-		keyValues[field] = val
-		parts = append(parts, fmt.Sprintf("%v", val))
-	}
-	return strings.Join(parts, "\x00"), keyValues
-}
-
 func (sw *SlidingWindow) buildRow(gs *groupState) map[string]any {
 	row := make(map[string]any)
 
@@ -392,12 +374,7 @@ func (sw *SlidingWindow) buildRow(gs *groupState) map[string]any {
 		if si.Aggregate == nil {
 			continue
 		}
-		result := gs.aggregators[aggIdx].Result()
-		// JSON-encode then decode to normalize types (int64 -> float64).
-		b, _ := json.Marshal(result)
-		var normalized any
-		_ = json.Unmarshal(b, &normalized)
-		row[si.Alias] = normalized
+		row[si.Alias] = normalizeNumeric(gs.aggregators[aggIdx].Result())
 		aggIdx++
 	}
 

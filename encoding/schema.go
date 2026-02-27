@@ -184,10 +184,11 @@ func GenerateOpaqueSchema(namespace string) (string, error) {
 
 // ColumnsHash returns a deterministic hash key for a set of columns.
 // Used as part of the schema cache key to detect column changes.
+// Uses string concatenation instead of fmt.Sprintf for lower allocation overhead.
 func ColumnsHash(columns []ColumnInfo) string {
 	parts := make([]string, len(columns))
 	for i, c := range columns {
-		parts[i] = fmt.Sprintf("%s:%s", c.Name, c.TypeName)
+		parts[i] = c.Name + ":" + c.TypeName
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ",")

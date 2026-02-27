@@ -233,11 +233,6 @@ func WithShutdownTimeout(d time.Duration) Option {
 	}
 }
 
-// DLQAware is implemented by adapters that can record failed events to a DLQ.
-type DLQAware interface {
-	SetDLQ(d dlq.DLQ)
-}
-
 // NewPipeline creates a Pipeline that will use the given detector and options.
 // Call Run to start the pipeline.
 func NewPipeline(det detector.Detector, opts ...Option) *Pipeline {
@@ -264,7 +259,7 @@ func NewPipeline(det detector.Detector, opts ...Option) *Pipeline {
 	tracer := p.tracerProvider.Tracer("github.com/florinutz/pgcdc")
 	for _, a := range p.adapters {
 		p.health.Register(a.Name())
-		if da, ok := a.(DLQAware); ok && p.dlq != nil {
+		if da, ok := a.(adapter.DLQAware); ok && p.dlq != nil {
 			da.SetDLQ(p.dlq)
 		}
 		if ta, ok := a.(adapter.Traceable); ok {
@@ -646,7 +641,7 @@ func NewSnapshotPipeline(snap *snapshot.Snapshot, opts ...Option) *Pipeline {
 	}
 	for _, a := range p.adapters {
 		p.health.Register(a.Name())
-		if da, ok := a.(DLQAware); ok && p.dlq != nil {
+		if da, ok := a.(adapter.DLQAware); ok && p.dlq != nil {
 			da.SetDLQ(p.dlq)
 		}
 	}
@@ -669,7 +664,7 @@ func (p *Pipeline) RunSnapshot(ctx context.Context) error {
 	ingest := p.bus.Ingest()
 
 	// Start the bus.
-	g.Go(func() error {
+	p.safeGo(g, "bus", func() error {
 		p.logger.Info("bus started", "buffer_size", p.busBuffer)
 		p.health.SetStatus("bus", health.StatusUp)
 		defer p.health.SetStatus("bus", health.StatusDown)
@@ -682,7 +677,7 @@ func (p *Pipeline) RunSnapshot(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("subscribe adapter %s: %w", a.Name(), err)
 		}
-		g.Go(func() error {
+		p.safeGo(g, a.Name(), func() error {
 			p.logger.Info("adapter started", "adapter", a.Name())
 			p.health.SetStatus(a.Name(), health.StatusUp)
 			defer p.health.SetStatus(a.Name(), health.StatusDown)
@@ -692,7 +687,7 @@ func (p *Pipeline) RunSnapshot(ctx context.Context) error {
 
 	// Run the snapshot. When it completes, cancel the context to shut down
 	// the bus and adapters.
-	g.Go(func() error {
+	p.safeGo(g, "snapshot", func() error {
 		p.health.SetStatus("snapshot", health.StatusUp)
 		defer p.health.SetStatus("snapshot", health.StatusDown)
 

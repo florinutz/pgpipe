@@ -146,7 +146,7 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 		mu.Lock()
 		upserts := batch
 		dels := deletes
-		batch = nil
+		batch = make([]map[string]interface{}, 0, a.batchSize)
 		deletes = nil
 		mu.Unlock()
 

@@ -143,7 +143,7 @@ func TestBus_StressSubscribeDuringFlood(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			time.Sleep(time.Duration(idx) * time.Millisecond)
-			ch, err := b.SubscribeWithFilter("late-"+string(rune('A'+idx)), nil)
+			ch, err := b.Subscribe("late-" + string(rune('A'+idx)))
 			if err != nil {
 				return
 			}

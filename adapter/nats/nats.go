@@ -19,7 +19,7 @@ import (
 	"github.com/florinutz/pgcdc/adapter"
 	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 )
@@ -39,6 +39,7 @@ type Adapter struct {
 	logger        *slog.Logger
 	ackFn         adapter.AckFunc
 	tracer        trace.Tracer
+	subjectCache  map[string]string
 }
 
 // SetTracer implements adapter.Traceable.
@@ -83,6 +84,7 @@ func New(
 		backoffBase:   backoffBase,
 		backoffCap:    backoffCap,
 		logger:        logger.With("adapter", adapterName),
+		subjectCache:  make(map[string]string),
 	}
 }
 
@@ -108,28 +110,11 @@ func (a *Adapter) Validate(ctx context.Context) error {
 // Start connects to NATS and publishes events from the channel. It blocks until
 // ctx is cancelled. On NATS disconnection, it reconnects with exponential backoff.
 func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
-	var attempt int
-	for {
-		err := a.run(ctx, events)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		delay := backoff.Jitter(attempt, a.backoffBase, a.backoffCap)
-		a.logger.Error("nats connection lost, reconnecting",
-			"error", err,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		metrics.NatsErrors.Inc()
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
+	return reconnect.Loop(ctx, adapterName, a.backoffBase, a.backoffCap,
+		a.logger, metrics.NatsErrors,
+		func(ctx context.Context) error {
+			return a.run(ctx, events)
+		})
 }
 
 func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
@@ -256,12 +241,17 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 
 // eventSubject converts an event channel to a NATS subject.
 // "pgcdc:orders" -> "pgcdc.orders", "pgcdc:public.orders" -> "pgcdc.public.orders"
+// Results are cached since channel-to-subject mappings are deterministic.
 func (a *Adapter) eventSubject(channel string) string {
+	if s, ok := a.subjectCache[channel]; ok {
+		return s
+	}
 	// Strip "pgcdc:" prefix if present, replace colons with dots.
 	subject := strings.ReplaceAll(channel, ":", ".")
 	// Ensure it starts with our prefix.
 	if !strings.HasPrefix(subject, a.subjectPrefix+".") {
 		subject = a.subjectPrefix + "." + subject
 	}
+	a.subjectCache[channel] = subject
 	return subject
 }

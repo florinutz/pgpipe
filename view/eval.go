@@ -36,9 +36,47 @@ func resolveField(field string, meta EventMeta, payload map[string]any) any {
 	return nil
 }
 
+// resolveFieldParsed looks up a field value using a pre-parsed path,
+// avoiding per-call strings.Split allocations. The parsedPath should be
+// the result of strings.Split(field, ".") computed at parse time.
+func resolveFieldParsed(field string, parsedPath []string, meta EventMeta, payload map[string]any) any {
+	// Metadata fields have no dots, so parsedPath will have length 1.
+	if len(parsedPath) == 1 {
+		switch field {
+		case "channel":
+			return meta.Channel
+		case "operation":
+			return meta.Operation
+		case "source":
+			return meta.Source
+		}
+		// Direct payload lookup.
+		if v, ok := payload[field]; ok {
+			return v
+		}
+		return nil
+	}
+
+	// Dotted fields: "payload.X" or "payload.X.Y"
+	if parsedPath[0] == "payload" {
+		return walkParsedPath(payload, parsedPath[1:])
+	}
+
+	// Fallback to direct payload lookup.
+	if v, ok := payload[field]; ok {
+		return v
+	}
+	return nil
+}
+
 // resolveNestedField walks dot-separated keys into nested maps.
 func resolveNestedField(m map[string]any, key string) any {
 	parts := strings.Split(key, ".")
+	return walkParsedPath(m, parts)
+}
+
+// walkParsedPath walks pre-split path parts into nested maps.
+func walkParsedPath(m map[string]any, parts []string) any {
 	current := any(m)
 	for _, p := range parts {
 		mm, ok := current.(map[string]any)

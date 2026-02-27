@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/internal/circuitbreaker"
 	"github.com/florinutz/pgcdc/internal/ratelimit"
+	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/tracing"
@@ -175,30 +177,11 @@ func (a *Adapter) Validate(ctx context.Context) error {
 func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 	a.logger.Info("embedding adapter started", "table", a.table, "model", a.model, "columns", a.columns)
 
-	var attempt int
-	for {
-		runErr := a.run(ctx, events)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if runErr == nil {
-			return nil
-		}
-
-		delay := backoff.Jitter(attempt, a.backoffBase, a.backoffCap)
-		a.logger.Error("db connection lost, reconnecting",
-			"error", runErr,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
+	return reconnect.Loop(ctx, "embedding", a.backoffBase, a.backoffCap,
+		a.logger, nil,
+		func(ctx context.Context) error {
+			return a.run(ctx, events)
+		})
 }
 
 func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
@@ -515,14 +498,22 @@ func (a *Adapter) extractPayload(ev event.Event) (sourceID, sourceTable, content
 
 	// Extract source ID.
 	if v, ok := p.Row[a.idColumn]; ok && v != nil {
-		sourceID = fmt.Sprintf("%v", v)
+		if s, ok := v.(string); ok {
+			sourceID = s
+		} else {
+			sourceID = fmt.Sprintf("%v", v)
+		}
 	}
 
 	// Concatenate text columns.
 	var parts []string
 	for _, col := range a.columns {
 		if v, ok := p.Row[col]; ok && v != nil {
-			parts = append(parts, fmt.Sprintf("%v", v))
+			if s, ok := v.(string); ok {
+				parts = append(parts, s)
+			} else {
+				parts = append(parts, fmt.Sprintf("%v", v))
+			}
 		}
 	}
 	content = strings.Join(parts, " ")
@@ -544,8 +535,8 @@ func (a *Adapter) embeddingColumnsChanged(p payload) bool {
 		return true // no old values to compare
 	}
 	for _, col := range a.columns {
-		newVal := fmt.Sprintf("%v", p.Row[col])
-		oldVal := fmt.Sprintf("%v", p.Old[col])
+		newVal := sprintValue(p.Row[col])
+		oldVal := sprintValue(p.Old[col])
 		if newVal != oldVal {
 			return true
 		}
@@ -553,15 +544,24 @@ func (a *Adapter) embeddingColumnsChanged(p payload) bool {
 	return false
 }
 
+// sprintValue converts a value to a string, fast-pathing the common string case.
+func sprintValue(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
 // formatVector converts a float64 slice to the pgvector string format "[v1,v2,...]".
 func formatVector(vec []float64) string {
 	var b strings.Builder
+	b.Grow(len(vec) * 12) // ~12 chars per float
 	b.WriteByte('[')
 	for i, v := range vec {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		fmt.Fprintf(&b, "%g", v)
+		b.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
 	}
 	b.WriteByte(']')
 	return b.String()
