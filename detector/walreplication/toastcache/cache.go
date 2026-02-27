@@ -28,9 +28,9 @@ type entry struct {
 type Cache struct {
 	maxEntries int
 	items      map[key]*entry
-	relIndex   map[uint32]map[string]struct{} // secondary index for EvictRelation (PK -> struct{})
-	head       *entry                         // most recently used
-	tail       *entry                         // least recently used
+	relIndex   map[uint32]map[string]*entry // secondary index: PK -> entry for O(1) removal + direct EvictRelation
+	head       *entry                       // most recently used
+	tail       *entry                       // least recently used
 	logger     *slog.Logger
 }
 
@@ -42,7 +42,7 @@ func New(maxEntries int, logger *slog.Logger) *Cache {
 	return &Cache{
 		maxEntries: maxEntries,
 		items:      make(map[key]*entry, maxEntries),
-		relIndex:   make(map[uint32]map[string]struct{}),
+		relIndex:   make(map[uint32]map[string]*entry),
 		logger:     logger.With("component", "toast_cache"),
 	}
 }
@@ -100,9 +100,9 @@ func (c *Cache) Put(relationID uint32, pk string, row map[string]any) {
 	e := &entry{k: k, row: row}
 	c.items[k] = e
 	if c.relIndex[relationID] == nil {
-		c.relIndex[relationID] = make(map[string]struct{})
+		c.relIndex[relationID] = make(map[string]*entry)
 	}
-	c.relIndex[relationID][pk] = struct{}{}
+	c.relIndex[relationID][pk] = e
 	c.pushFront(e)
 	metrics.ToastCacheEntries.Set(float64(len(c.items)))
 }
@@ -133,12 +133,9 @@ func (c *Cache) Delete(relationID uint32, pk string) {
 func (c *Cache) EvictRelation(relationID uint32) {
 	pks := c.relIndex[relationID]
 	count := len(pks)
-	for pk := range pks {
-		k := key{RelationID: relationID, PK: pk}
-		if e, ok := c.items[k]; ok {
-			c.unlink(e)
-			delete(c.items, k)
-		}
+	for _, e := range pks {
+		c.unlink(e)
+		delete(c.items, e.k)
 	}
 	delete(c.relIndex, relationID)
 	if count > 0 {
@@ -156,7 +153,7 @@ func (c *Cache) EvictAll() {
 	if count > 0 {
 		metrics.ToastCacheEvictions.Add(float64(count))
 	}
-	c.relIndex = make(map[uint32]map[string]struct{})
+	c.relIndex = make(map[uint32]map[string]*entry)
 	c.head = nil
 	c.tail = nil
 	metrics.ToastCacheEntries.Set(0)
