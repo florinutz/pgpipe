@@ -260,41 +260,58 @@ func runDLQReplay(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		capture := newReplayCaptureDLQ()
-
-		// Wire DLQ capture if adapter supports it.
-		if da, ok := a.(interface{ SetDLQ(dlq.DLQ) }); ok {
-			da.SetDLQ(capture)
-		}
-
-		// Unmarshal events and send to adapter.
-		ch := make(chan event.Event, len(recs))
-		recordIDs := make(map[string]string) // event ID -> record ID
-		for _, r := range recs {
-			var ev event.Event
-			if unmarshalErr := json.Unmarshal(r.Payload, &ev); unmarshalErr != nil {
-				logger.Error("unmarshal dlq payload", "record_id", r.ID, "error", unmarshalErr)
-				totalFailed++
-				continue
-			}
-			recordIDs[ev.ID] = r.ID
-			ch <- ev
-		}
-		close(ch)
-
-		// Run adapter with per-adapter timeout.
-		adapterCtx, adapterCancel := context.WithTimeout(ctx, 2*time.Minute)
-		_ = a.Start(adapterCtx, ch)
-		adapterCancel()
-
-		// Determine successes vs failures.
 		var successIDs []string
-		for eventID, recordID := range recordIDs {
-			if !capture.Failed(eventID) {
-				successIDs = append(successIDs, recordID)
+		var failed int
+
+		// Prefer Deliverer interface: call Deliver() directly, check errors.
+		if d, ok := a.(adapter.Deliverer); ok {
+			for _, r := range recs {
+				var ev event.Event
+				if unmarshalErr := json.Unmarshal(r.Payload, &ev); unmarshalErr != nil {
+					logger.Error("unmarshal dlq payload", "record_id", r.ID, "error", unmarshalErr)
+					failed++
+					continue
+				}
+				if deliverErr := d.Deliver(ctx, ev); deliverErr != nil {
+					logger.Error("replay delivery failed", "record_id", r.ID, "adapter", adapterName, "error", deliverErr)
+					failed++
+				} else {
+					successIDs = append(successIDs, r.ID)
+				}
+			}
+		} else {
+			// Legacy Start() path: use capture DLQ to track failures.
+			capture := newReplayCaptureDLQ()
+			if da, ok := a.(interface{ SetDLQ(dlq.DLQ) }); ok {
+				da.SetDLQ(capture)
+			}
+
+			ch := make(chan event.Event, len(recs))
+			recordIDs := make(map[string]string) // event ID -> record ID
+			for _, r := range recs {
+				var ev event.Event
+				if unmarshalErr := json.Unmarshal(r.Payload, &ev); unmarshalErr != nil {
+					logger.Error("unmarshal dlq payload", "record_id", r.ID, "error", unmarshalErr)
+					failed++
+					continue
+				}
+				recordIDs[ev.ID] = r.ID
+				ch <- ev
+			}
+			close(ch)
+
+			adapterCtx, adapterCancel := context.WithTimeout(ctx, 2*time.Minute)
+			_ = a.Start(adapterCtx, ch)
+			adapterCancel()
+
+			for eventID, recordID := range recordIDs {
+				if !capture.Failed(eventID) {
+					successIDs = append(successIDs, recordID)
+				} else {
+					failed++
+				}
 			}
 		}
-		failed := len(recs) - len(successIDs)
 
 		if len(successIDs) > 0 {
 			if _, markErr := store.MarkReplayed(ctx, successIDs); markErr != nil {
@@ -320,7 +337,7 @@ func buildReplayAdapter(name string, cmd *cobra.Command, logger *slog.Logger) (a
 		if url == "" {
 			return nil, fmt.Errorf("--webhook-url required for webhook replay")
 		}
-		return webhook.New(url, nil, "", 3, 0, 0, 0, 0, 0, 0, 0, logger), nil
+		return webhook.New(url, nil, "", 3, 0, 0, 0, logger), nil
 	case "kafka":
 		return buildKafkaReplayAdapter(cmd, logger)
 	default:

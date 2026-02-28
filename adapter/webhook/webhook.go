@@ -16,17 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
-
-	"github.com/florinutz/pgcdc/adapter"
-	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
-	"github.com/florinutz/pgcdc/internal/circuitbreaker"
-	"github.com/florinutz/pgcdc/internal/ratelimit"
-	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/tracing"
 )
@@ -40,6 +31,12 @@ const (
 )
 
 // Adapter delivers events as HTTP POST requests to a webhook URL.
+//
+// Implements adapter.Deliverer — the middleware stack provides retry, circuit
+// breaker, rate limiting, DLQ, tracing, metrics, and cooperative checkpoint ack.
+// The adapter's own Deliver() handles only the HTTP POST with per-attempt retry
+// for transient HTTP errors (5xx/429). The middleware retry wraps around the
+// entire Deliver() call for broader failure recovery.
 type Adapter struct {
 	url         string
 	headers     map[string]string
@@ -49,27 +46,13 @@ type Adapter struct {
 	backoffCap  time.Duration
 	client      *http.Client
 	logger      *slog.Logger
-	dlq         dlq.DLQ
-	ackFn       adapter.AckFunc
-	tracer      trace.Tracer
 	inflight    sync.WaitGroup
-	cb          *circuitbreaker.CircuitBreaker
-	limiter     *ratelimit.Limiter
 }
-
-// SetTracer implements adapter.Traceable.
-func (a *Adapter) SetTracer(t trace.Tracer) { a.tracer = t }
-
-// SetDLQ sets the dead letter queue for failed deliveries.
-func (a *Adapter) SetDLQ(d dlq.DLQ) { a.dlq = d }
-
-// SetAckFunc implements adapter.Acknowledger.
-func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
 
 // New creates a webhook adapter. If maxRetries is <= 0 it defaults to 5.
 // If logger is nil a no-op logger is used. Duration parameters default
 // to sensible values when zero.
-func New(url string, headers map[string]string, signingKey string, maxRetries int, timeout, backoffBase, backoffCap time.Duration, cbMaxFailures int, cbResetTimeout time.Duration, rateLimit float64, rateBurst int, logger *slog.Logger) *Adapter {
+func New(url string, headers map[string]string, signingKey string, maxRetries int, timeout, backoffBase, backoffCap time.Duration, logger *slog.Logger) *Adapter {
 	if maxRetries <= 0 {
 		maxRetries = defaultMaxRetries
 	}
@@ -85,7 +68,7 @@ func New(url string, headers map[string]string, signingKey string, maxRetries in
 	if logger == nil {
 		logger = slog.Default()
 	}
-	a := &Adapter{
+	return &Adapter{
 		url:         url,
 		headers:     headers,
 		signingKey:  signingKey,
@@ -95,100 +78,32 @@ func New(url string, headers map[string]string, signingKey string, maxRetries in
 		client: &http.Client{
 			Timeout: timeout,
 		},
-		logger:  logger,
-		limiter: ratelimit.New(rateLimit, rateBurst, "webhook", logger),
+		logger: logger,
 	}
-	if cbMaxFailures > 0 {
-		a.cb = circuitbreaker.New(cbMaxFailures, cbResetTimeout, logger)
-	}
-	return a
 }
 
-// Start blocks, consuming events from the channel and delivering each one via
-// HTTP POST. It returns nil when the channel is closed or ctx.Err() when the
-// context is cancelled.
-func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
-	a.logger.Info("webhook adapter started", "url", a.url)
+// Deliver sends a single event as an HTTP POST, retrying on 5xx and 429
+// responses with exponential backoff. Implements adapter.Deliverer.
+func (a *Adapter) Deliver(ctx context.Context, ev event.Event) error {
+	a.inflight.Add(1)
+	defer a.inflight.Done()
+	return a.deliver(ctx, ev)
+}
 
+// Start is the legacy event loop kept for backward compatibility.
+// When the middleware detects Deliverer, it uses Deliver() instead.
+func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
+	a.logger.Info("webhook adapter started (legacy path)", "url", a.url)
 	for {
 		select {
 		case <-ctx.Done():
-			a.logger.Info("webhook adapter stopping", "reason", "context cancelled")
 			return ctx.Err()
-
 		case ev, ok := <-events:
 			if !ok {
-				a.logger.Info("webhook adapter stopping", "reason", "channel closed")
 				return nil
 			}
-
-			// Circuit breaker check.
-			if a.cb != nil && !a.cb.Allow() {
-				metrics.CircuitBreakerState.WithLabelValues("webhook").Set(1) // open
-				if a.dlq != nil {
-					_ = a.dlq.Record(ctx, ev, "webhook", &pgcdcerr.CircuitBreakerOpenError{Adapter: "webhook"})
-				}
-				if a.ackFn != nil && ev.LSN > 0 {
-					a.ackFn(ev.LSN)
-				}
-				continue
-			}
-
-			// Rate limiter.
-			if err := a.limiter.Wait(ctx); err != nil {
-				return ctx.Err()
-			}
-
-			// Create delivery span linked to the detector span.
-			deliverCtx := ctx
-			var span trace.Span
-			if a.tracer != nil {
-				var opts []trace.SpanStartOption
-				opts = append(opts,
-					trace.WithSpanKind(trace.SpanKindConsumer),
-					trace.WithAttributes(
-						attribute.String("pgcdc.adapter", "webhook"),
-						attribute.String("pgcdc.event.id", ev.ID),
-						attribute.String("pgcdc.channel", ev.Channel),
-						attribute.String("pgcdc.operation", ev.Operation),
-					),
-				)
-				if ev.SpanContext.IsValid() {
-					opts = append(opts, trace.WithLinks(trace.Link{SpanContext: ev.SpanContext}))
-					deliverCtx = trace.ContextWithRemoteSpanContext(ctx, ev.SpanContext)
-				}
-				deliverCtx, span = a.tracer.Start(deliverCtx, "pgcdc.adapter.deliver", opts...)
-			}
-
-			a.inflight.Add(1)
-			if err := a.deliver(deliverCtx, ev); err != nil {
-				if a.cb != nil {
-					a.cb.RecordFailure()
-				}
-				if span != nil {
-					span.RecordError(err)
-					span.SetStatus(codes.Error, err.Error())
-				}
-				a.logger.Error("delivery failed, skipping event",
-					"event_id", ev.ID,
-					"channel", ev.Channel,
-					"error", err,
-				)
-				if a.dlq != nil {
-					if dlqErr := a.dlq.Record(ctx, ev, "webhook", err); dlqErr != nil {
-						a.logger.Error("dlq record failed", "error", dlqErr)
-					}
-				}
-			} else if a.cb != nil {
-				a.cb.RecordSuccess()
-			}
-			if span != nil {
-				span.End()
-			}
-			a.inflight.Done()
-			// Ack after terminal outcome (delivery, DLQ record, or non-retryable skip).
-			if a.ackFn != nil && ev.LSN > 0 {
-				a.ackFn(ev.LSN)
+			if err := a.Deliver(ctx, ev); err != nil {
+				a.logger.Error("delivery failed", "event_id", ev.ID, "error", err)
 			}
 		}
 	}
@@ -237,7 +152,7 @@ func (a *Adapter) Drain(ctx context.Context) error {
 
 // deliver marshals the event to JSON and sends it as an HTTP POST, retrying on
 // 5xx and 429 responses with exponential backoff and full jitter. Non-retryable
-// 4xx errors are logged and skipped.
+// 4xx errors are logged and treated as success (skip).
 func (a *Adapter) deliver(ctx context.Context, ev event.Event) error {
 	body, err := json.Marshal(ev)
 	if err != nil {
@@ -249,7 +164,6 @@ func (a *Adapter) deliver(ctx context.Context, ev event.Event) error {
 
 	for attempt := range a.maxRetries {
 		if attempt > 0 {
-			metrics.WebhookRetries.Inc()
 			wait := backoff.Jitter(attempt, a.backoffBase, a.backoffCap)
 			a.logger.Info("retrying delivery",
 				"event_id", ev.ID,
@@ -290,9 +204,7 @@ func (a *Adapter) deliver(ctx context.Context, ev event.Event) error {
 			req.Header.Set("X-PGCDC-Signature", "sha256="+sig)
 		}
 
-		start := time.Now()
 		resp, err := a.client.Do(req)
-		metrics.WebhookDuration.Observe(time.Since(start).Seconds())
 		if err != nil {
 			// Network errors are retryable.
 			lastErr = err
@@ -307,7 +219,6 @@ func (a *Adapter) deliver(ctx context.Context, ev event.Event) error {
 		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			metrics.EventsDelivered.WithLabelValues("webhook").Inc()
 			a.logger.Debug("event delivered",
 				"event_id", ev.ID,
 				"status", resp.StatusCode,

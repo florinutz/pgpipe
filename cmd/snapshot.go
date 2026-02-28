@@ -369,10 +369,6 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 				cfg.Webhook.Timeout,
 				cfg.Webhook.BackoffBase,
 				cfg.Webhook.BackoffCap,
-				cfg.Webhook.CBMaxFailures,
-				cfg.Webhook.CBResetTimeout,
-				cfg.Webhook.RateLimit,
-				cfg.Webhook.RateLimitBurst,
 				logger,
 			)))
 		case "file":

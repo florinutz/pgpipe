@@ -18,14 +18,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/florinutz/pgcdc"
-	embeddingadapter "github.com/florinutz/pgcdc/adapter/embedding"
-	execadapter "github.com/florinutz/pgcdc/adapter/exec"
-	fileadapter "github.com/florinutz/pgcdc/adapter/file"
-	"github.com/florinutz/pgcdc/adapter/pgtable"
-	searchadapter "github.com/florinutz/pgcdc/adapter/search"
+	"github.com/florinutz/pgcdc/adapter/middleware"
 	"github.com/florinutz/pgcdc/adapter/sse"
-	"github.com/florinutz/pgcdc/adapter/stdout"
-	"github.com/florinutz/pgcdc/adapter/webhook"
 	"github.com/florinutz/pgcdc/adapter/ws"
 	"github.com/florinutz/pgcdc/backpressure"
 	"github.com/florinutz/pgcdc/bus"
@@ -38,12 +32,13 @@ import (
 	"github.com/florinutz/pgcdc/detector/walreplication"
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/encoding"
-	"github.com/florinutz/pgcdc/encoding/registry"
+	encregistry "github.com/florinutz/pgcdc/encoding/registry"
 	"github.com/florinutz/pgcdc/health"
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/internal/migrate"
 	"github.com/florinutz/pgcdc/internal/server"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/registry"
 	"github.com/florinutz/pgcdc/snapshot"
 	"github.com/florinutz/pgcdc/tracing"
 	"github.com/florinutz/pgcdc/transform"
@@ -820,142 +815,33 @@ func runListen(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown detector type: %q (expected listen_notify, wal, outbox, mysql, or mongodb)", cfg.Detector.Type)
 	}
 
-	// Create adapters.
+	// Create adapters via registry.
+	adapterCtx := registry.AdapterContext{
+		Cfg:          cfg,
+		Logger:       logger,
+		Ctx:          ctx,
+		KafkaEncoder: kafkaEncoder,
+		NatsEncoder:  natsEncoder,
+	}
+
 	var sseBroker *sse.Broker
 	var wsBroker *ws.Broker
 	for _, name := range cfg.Adapters {
-		switch name {
-		case "stdout":
-			opts = append(opts, pgcdc.WithAdapter(stdout.New(nil, logger)))
-		case "webhook":
-			opts = append(opts, pgcdc.WithAdapter(webhook.New(
-				cfg.Webhook.URL,
-				cfg.Webhook.Headers,
-				cfg.Webhook.SigningKey,
-				cfg.Webhook.MaxRetries,
-				cfg.Webhook.Timeout,
-				cfg.Webhook.BackoffBase,
-				cfg.Webhook.BackoffCap,
-				cfg.Webhook.CBMaxFailures,
-				cfg.Webhook.CBResetTimeout,
-				cfg.Webhook.RateLimit,
-				cfg.Webhook.RateLimitBurst,
-				logger,
-			)))
-		case "sse":
-			sseBroker = sse.New(cfg.Bus.BufferSize, cfg.SSE.HeartbeatInterval, logger)
-			opts = append(opts, pgcdc.WithAdapter(sseBroker))
-		case "file":
-			opts = append(opts, pgcdc.WithAdapter(fileadapter.New(cfg.File.Path, cfg.File.MaxSize, cfg.File.MaxFiles, logger)))
-		case "exec":
-			opts = append(opts, pgcdc.WithAdapter(execadapter.New(cfg.Exec.Command, cfg.Exec.BackoffBase, cfg.Exec.BackoffCap, logger)))
-		case "pg_table":
-			pgTableURL := cfg.PGTable.URL
-			if pgTableURL == "" {
-				pgTableURL = cfg.DatabaseURL
-			}
-			opts = append(opts, pgcdc.WithAdapter(pgtable.New(pgTableURL, cfg.PGTable.Table, cfg.PGTable.BackoffBase, cfg.PGTable.BackoffCap, logger)))
-		case "ws":
-			wsBroker = ws.New(cfg.Bus.BufferSize, cfg.WebSocket.PingInterval, logger)
-			opts = append(opts, pgcdc.WithAdapter(wsBroker))
-		case "embedding":
-			embDBURL := cfg.Embedding.DBURL
-			if embDBURL == "" {
-				embDBURL = cfg.DatabaseURL
-			}
-			opts = append(opts, pgcdc.WithAdapter(embeddingadapter.New(
-				cfg.Embedding.APIURL,
-				cfg.Embedding.APIKey,
-				cfg.Embedding.Model,
-				cfg.Embedding.Columns,
-				cfg.Embedding.IDColumn,
-				embDBURL,
-				cfg.Embedding.Table,
-				cfg.Embedding.Dimension,
-				cfg.Embedding.MaxRetries,
-				cfg.Embedding.Timeout,
-				cfg.Embedding.BackoffBase,
-				cfg.Embedding.BackoffCap,
-				cfg.Embedding.SkipUnchanged,
-				cfg.Embedding.CBMaxFailures,
-				cfg.Embedding.CBResetTimeout,
-				cfg.Embedding.RateLimit,
-				cfg.Embedding.RateLimitBurst,
-				logger,
-			)))
-		case "iceberg":
-			a, aErr := makeIcebergAdapter(cfg, logger)
-			if aErr != nil {
-				return aErr
-			}
-			opts = append(opts, pgcdc.WithAdapter(a))
-		case "nats":
-			a, aErr := makeNATSAdapter(cfg, natsEncoder, logger)
-			if aErr != nil {
-				return aErr
-			}
-			opts = append(opts, pgcdc.WithAdapter(a))
-		case "search":
-			opts = append(opts, pgcdc.WithAdapter(searchadapter.New(
-				cfg.Search.Engine,
-				cfg.Search.URL,
-				cfg.Search.APIKey,
-				cfg.Search.Index,
-				cfg.Search.IDColumn,
-				cfg.Search.BatchSize,
-				cfg.Search.BatchInterval,
-				cfg.Search.BackoffBase,
-				cfg.Search.BackoffCap,
-				logger,
-			)))
-		case "redis":
-			a, aErr := makeRedisAdapter(cfg, logger)
-			if aErr != nil {
-				return aErr
-			}
-			opts = append(opts, pgcdc.WithAdapter(a))
-		case "grpc":
-			a, aErr := makeGRPCAdapter(cfg, logger)
-			if aErr != nil {
-				return aErr
-			}
-			opts = append(opts, pgcdc.WithAdapter(a))
-		case "kafka":
-			a, aErr := makeKafkaAdapter(cfg, kafkaEncoder, logger)
-			if aErr != nil {
-				return aErr
-			}
-			opts = append(opts, pgcdc.WithAdapter(a))
-		case "kafkaserver":
-			var ksCpStore checkpoint.Store
-			ksCheckpointDB := cfg.KafkaServer.CheckpointDB
-			if ksCheckpointDB == "" {
-				ksCheckpointDB = cfg.DatabaseURL
-			}
-			if ksCheckpointDB != "" {
-				var cpErr error
-				ksCpStore, cpErr = checkpoint.NewPGStore(ctx, ksCheckpointDB, logger)
-				if cpErr != nil {
-					return fmt.Errorf("create kafkaserver checkpoint store: %w", cpErr)
-				}
-			}
-			a, aErr := makeKafkaServerAdapter(cfg, ksCpStore, logger)
-			if aErr != nil {
-				return aErr
-			}
-			opts = append(opts, pgcdc.WithAdapter(a))
-		case "s3":
-			a, aErr := makeS3Adapter(cfg, logger)
-			if aErr != nil {
-				return aErr
-			}
-			opts = append(opts, pgcdc.WithAdapter(a))
-		case "view":
-			a, aErr := makeViewAdapter(cfg, logger)
-			if aErr != nil {
-				return aErr
-			}
-			opts = append(opts, pgcdc.WithAdapter(a))
+		result, aErr := registry.CreateAdapter(name, adapterCtx)
+		if aErr != nil {
+			return fmt.Errorf("create adapter %s: %w", name, aErr)
+		}
+		opts = append(opts, pgcdc.WithAdapter(result.Adapter))
+
+		// Wire adapter-specific extras.
+		if mwCfg, ok := result.Extra["middleware_config"].(middleware.Config); ok {
+			opts = append(opts, pgcdc.WithMiddlewareConfig(name, mwCfg))
+		}
+		if b, ok := result.Extra["sse_broker"].(*sse.Broker); ok {
+			sseBroker = b
+		}
+		if b, ok := result.Extra["ws_broker"].(*ws.Broker); ok {
+			wsBroker = b
 		}
 	}
 
@@ -993,11 +879,11 @@ func runListen(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if !hasViewAdapter {
-			a, aErr := makeViewAdapter(cfg, logger)
+			result, aErr := registry.CreateAdapter("view", adapterCtx)
 			if aErr != nil {
-				return aErr
+				return fmt.Errorf("create view adapter: %w", aErr)
 			}
-			opts = append(opts, pgcdc.WithAdapter(a))
+			opts = append(opts, pgcdc.WithAdapter(result.Adapter))
 		}
 	}
 
@@ -1218,9 +1104,9 @@ func buildEncoders(cfg config.Config, logger *slog.Logger) (kafkaEnc, natsEnc en
 	}
 
 	// Build schema registry client if any non-JSON encoding is configured.
-	var regClient *registry.Client
+	var regClient *encregistry.Client
 	if cfg.Encoding.SchemaRegistryURL != "" {
-		regClient = registry.New(
+		regClient = encregistry.New(
 			cfg.Encoding.SchemaRegistryURL,
 			cfg.Encoding.SchemaRegistryUsername,
 			cfg.Encoding.SchemaRegistryPassword,
@@ -1233,7 +1119,7 @@ func buildEncoders(cfg config.Config, logger *slog.Logger) (kafkaEnc, natsEnc en
 	return kafkaEnc, natsEnc, nil
 }
 
-func makeEncoder(encType encoding.EncodingType, regClient *registry.Client, logger *slog.Logger) encoding.Encoder {
+func makeEncoder(encType encoding.EncodingType, regClient *encregistry.Client, logger *slog.Logger) encoding.Encoder {
 	switch encType {
 	case encoding.EncodingAvro:
 		opts := []encoding.AvroOption{}
@@ -1245,5 +1131,36 @@ func makeEncoder(encType encoding.EncodingType, regClient *registry.Client, logg
 		return encoding.NewProtobufEncoder(regClient, logger)
 	default:
 		return nil // JSON = nil encoder, adapters use raw bytes
+	}
+}
+
+// middlewareConfigFrom builds a middleware.Config from per-adapter config fields.
+// Used for backward compatibility: existing --webhook-cb-failures etc. flags
+// populate the middleware config that wraps the Deliverer.
+
+func webhookMiddlewareConfig(cfg config.Config) middleware.Config {
+	return middleware.Config{
+		CircuitBreaker: cbConfig(cfg.Webhook.CBMaxFailures, cfg.Webhook.CBResetTimeout),
+		RateLimit:      rlConfig(cfg.Webhook.RateLimit, cfg.Webhook.RateLimitBurst),
+	}
+}
+
+func cbConfig(maxFailures int, resetTimeout time.Duration) *middleware.CircuitBreakerConfig {
+	if maxFailures <= 0 {
+		return nil
+	}
+	return &middleware.CircuitBreakerConfig{
+		MaxFailures:  maxFailures,
+		ResetTimeout: resetTimeout,
+	}
+}
+
+func rlConfig(eps float64, burst int) *middleware.RateLimitConfig {
+	if eps <= 0 {
+		return nil
+	}
+	return &middleware.RateLimitConfig{
+		EventsPerSecond: eps,
+		Burst:           burst,
 	}
 }

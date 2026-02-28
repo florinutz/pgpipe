@@ -517,6 +517,43 @@ var (
 		Help: "Total events dropped due to group cardinality exceeding max_groups.",
 	}, []string{"view"})
 
+	// Middleware metrics.
+
+	MiddlewareRetries = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_middleware_retries_total",
+		Help: "Total number of delivery retries across all middleware-wrapped adapters.",
+	})
+
+	MiddlewareDeliveryDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "pgcdc_middleware_delivery_duration_seconds",
+		Help:    "Duration of event delivery through the middleware chain.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"adapter"})
+
+	// Batch runner metrics.
+
+	BatchFlushes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_batch_flushes_total",
+		Help: "Total number of batch flush operations.",
+	}, []string{"adapter", "status"})
+
+	BatchFlushSize = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "pgcdc_batch_flush_size",
+		Help:    "Number of events per batch flush.",
+		Buckets: []float64{1, 10, 50, 100, 500, 1000, 5000, 10000},
+	}, []string{"adapter"})
+
+	BatchFlushDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "pgcdc_batch_flush_duration_seconds",
+		Help:    "Duration of batch flush operations.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"adapter"})
+
+	BatchBufferSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pgcdc_batch_buffer_size",
+		Help: "Current number of events buffered for batch flush.",
+	}, []string{"adapter"})
+
 	// Config reload metrics.
 
 	ConfigReloads = promauto.NewCounter(prometheus.CounterOpts{

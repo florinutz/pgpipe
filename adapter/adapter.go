@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"time"
 
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
@@ -11,6 +12,15 @@ import (
 type Adapter interface {
 	Start(ctx context.Context, events <-chan event.Event) error
 	Name() string
+}
+
+// Deliverer is implemented by adapters that deliver events one at a time.
+// Adapters implementing Deliverer get the middleware stack (retry, circuit
+// breaker, rate limiting, DLQ, metrics, tracing, ack) for free. The middleware
+// provides the Start() event loop — Deliverer adapters should still implement
+// Start() as a fallback but the pipeline will prefer the middleware path.
+type Deliverer interface {
+	Deliver(ctx context.Context, ev event.Event) error
 }
 
 // AckFunc is called by an adapter after it has fully processed an event.
@@ -58,4 +68,31 @@ type Reinjector interface {
 // The pipeline injects a DLQ via SetDLQ when a DLQ backend is configured.
 type DLQAware interface {
 	SetDLQ(d dlq.DLQ)
+}
+
+// Batcher is implemented by adapters that accumulate events and flush them
+// in batches (e.g., S3, search). The batch runner provides the event loop,
+// timer/size flush triggers, shutdown drain, DLQ, and cooperative ack.
+type Batcher interface {
+	Flush(ctx context.Context, batch []event.Event) FlushResult
+	BatchConfig() BatchConfig
+}
+
+// BatchConfig controls batch accumulation behavior.
+type BatchConfig struct {
+	MaxSize       int           // flush when batch reaches this size
+	FlushInterval time.Duration // flush on this timer
+}
+
+// FlushResult reports the outcome of a batch flush.
+type FlushResult struct {
+	Delivered int           // number of events successfully delivered
+	Failed    []FailedEvent // individual failures sent to DLQ
+	Err       error         // fatal error → retry entire batch
+}
+
+// FailedEvent pairs an event with the error that caused its failure.
+type FailedEvent struct {
+	Event event.Event
+	Err   error
 }

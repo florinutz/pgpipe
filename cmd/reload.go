@@ -6,6 +6,7 @@ import (
 
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/registry"
 	"github.com/florinutz/pgcdc/transform"
 	"github.com/spf13/cobra"
 )
@@ -99,69 +100,15 @@ func mergeRoutes(cli, yaml map[string][]string) map[string][]string {
 	return merged
 }
 
-// specToTransform converts a config TransformSpec into a TransformFunc.
+// specToTransform converts a config TransformSpec into a TransformFunc
+// using the component registry.
 func specToTransform(spec config.TransformSpec) transform.TransformFunc {
-	switch spec.Type {
-	case "drop_columns":
-		if len(spec.Columns) == 0 {
-			return nil
-		}
-		return transform.DropColumns(spec.Columns...)
-	case "rename_fields":
-		if len(spec.Mapping) == 0 {
-			return nil
-		}
-		return transform.RenameFields(spec.Mapping)
-	case "mask":
-		if len(spec.Fields) == 0 {
-			return nil
-		}
-		fields := make([]transform.MaskField, len(spec.Fields))
-		for i, f := range spec.Fields {
-			fields[i] = transform.MaskField{
-				Field: f.Field,
-				Mode:  transform.MaskMode(f.Mode),
-			}
-		}
-		return transform.Mask(fields...)
-	case "filter":
-		if len(spec.Filter.Operations) > 0 {
-			return transform.FilterOperation(spec.Filter.Operations...)
-		}
-		if spec.Filter.Field != "" && len(spec.Filter.In) > 0 {
-			vals := make([]any, len(spec.Filter.In))
-			for i, v := range spec.Filter.In {
-				vals[i] = v
-			}
-			return transform.FilterFieldIn(spec.Filter.Field, vals...)
-		}
-		if spec.Filter.Field != "" && spec.Filter.Equals != "" {
-			return transform.FilterField(spec.Filter.Field, spec.Filter.Equals)
-		}
-		return nil
-	case "debezium":
-		var dopts []transform.DebeziumOption
-		if spec.Debezium.ConnectorName != "" {
-			dopts = append(dopts, transform.WithConnectorName(spec.Debezium.ConnectorName))
-		}
-		if spec.Debezium.Database != "" {
-			dopts = append(dopts, transform.WithDatabase(spec.Debezium.Database))
-		}
-		return transform.Debezium(dopts...)
-	case "cloudevents":
-		var copts []transform.CloudEventsOption
-		if spec.CloudEvents.Source != "" {
-			copts = append(copts, transform.WithSource(spec.CloudEvents.Source))
-		}
-		if spec.CloudEvents.TypePrefix != "" {
-			copts = append(copts, transform.WithTypePrefix(spec.CloudEvents.TypePrefix))
-		}
-		return transform.CloudEvents(copts...)
-	default:
+	fn := registry.SpecToTransform(spec)
+	if fn == nil && spec.Type != "" {
 		slog.Warn("unknown transform type in config, skipping", "type", spec.Type)
 		metrics.ConfigReloadErrors.Inc()
-		return nil
 	}
+	return fn
 }
 
 // buildTransformOpts builds global and per-adapter transforms from CLI flags and YAML config.

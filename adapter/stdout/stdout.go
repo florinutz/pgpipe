@@ -7,19 +7,21 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 
-	"github.com/florinutz/pgcdc/adapter"
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/metrics"
 )
 
 // Adapter writes events as JSON-lines to an io.Writer.
 // It is the simplest adapter, useful for debugging and unix piping
 // (e.g. pgcdc listen -c orders | jq .payload).
+//
+// Implements adapter.Deliverer — the middleware stack provides the event loop,
+// metrics, and cooperative checkpoint ack.
 type Adapter struct {
 	w      io.Writer
+	mu     sync.Mutex // protects concurrent writes
 	logger *slog.Logger
-	ackFn  adapter.AckFunc
 }
 
 // New creates a stdout adapter that writes JSON-lines to w.
@@ -37,34 +39,31 @@ func New(w io.Writer, logger *slog.Logger) *Adapter {
 	}
 }
 
-// SetAckFunc implements adapter.Acknowledger.
-func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
+// Deliver writes a single event as a JSON line to the underlying writer.
+// Implements adapter.Deliverer.
+func (a *Adapter) Deliver(_ context.Context, ev event.Event) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := json.NewEncoder(a.w).Encode(ev); err != nil {
+		return fmt.Errorf("encode event %s: %w", ev.ID, err)
+	}
+	return nil
+}
 
-// Start blocks, consuming events from the channel and writing each one as a
-// JSON line to the underlying writer. It returns nil when the channel is closed
-// or the context is cancelled.
+// Start is the legacy event loop kept for backward compatibility.
+// When the middleware detects Deliverer, it uses Deliver() instead.
 func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
-	a.logger.Info("stdout adapter started")
-
-	enc := json.NewEncoder(a.w)
-
+	a.logger.Info("stdout adapter started (legacy path)")
 	for {
 		select {
 		case <-ctx.Done():
-			a.logger.Info("stdout adapter stopping", "reason", "context cancelled")
 			return ctx.Err()
-
 		case ev, ok := <-events:
 			if !ok {
-				a.logger.Info("stdout adapter stopping", "reason", "channel closed")
 				return nil
 			}
-			if err := enc.Encode(ev); err != nil {
-				return fmt.Errorf("stdout adapter: encode event %s: %w", ev.ID, err)
-			}
-			metrics.EventsDelivered.WithLabelValues("stdout").Inc()
-			if a.ackFn != nil && ev.LSN > 0 {
-				a.ackFn(ev.LSN)
+			if err := a.Deliver(ctx, ev); err != nil {
+				return err
 			}
 		}
 	}
