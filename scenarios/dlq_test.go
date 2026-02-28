@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/florinutz/pgcdc"
+	"github.com/florinutz/pgcdc/adapter/middleware"
 	"github.com/florinutz/pgcdc/adapter/webhook"
-	"github.com/florinutz/pgcdc/bus"
 	"github.com/florinutz/pgcdc/detector/listennotify"
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
@@ -34,25 +35,28 @@ func TestScenario_DLQCommands(t *testing.T) {
 			return http.StatusInternalServerError
 		})
 		// maxRetries=1, fast backoff so retries complete quickly.
-		a := webhook.New(receiver.Server.URL, nil, "", 1, 0, 50*time.Millisecond, 100*time.Millisecond, 0, 0, 0, 0, logger)
+		a := webhook.New(receiver.Server.URL, nil, "", 1, 0, 50*time.Millisecond, 100*time.Millisecond, logger)
 
 		pgDLQ := dlq.NewPGTableDLQ(connStr, dlqTable, logger)
-		a.SetDLQ(pgDLQ)
 		t.Cleanup(func() { _ = pgDLQ.Close() })
 
 		det := listennotify.New(connStr, []string{channel}, 0, 0, logger)
-		b := bus.New(64, logger)
+		pipeline := pgcdc.NewPipeline(det,
+			pgcdc.WithAdapter(a),
+			pgcdc.WithBusBuffer(64),
+			pgcdc.WithLogger(logger),
+			pgcdc.WithDLQ(pgDLQ),
+			pgcdc.WithMiddlewareConfig("webhook", middleware.Config{
+				Retry: &middleware.RetryConfig{
+					MaxRetries:  1,
+					BackoffBase: 50 * time.Millisecond,
+					BackoffCap:  100 * time.Millisecond,
+				},
+			}),
+		)
 
 		g, gCtx := errgroup.WithContext(pipelineCtx)
-		g.Go(func() error { return b.Start(gCtx) })
-		g.Go(func() error { return det.Start(gCtx, b.Ingest()) })
-
-		sub, err := b.Subscribe("webhook")
-		if err != nil {
-			pipelineCancel()
-			t.Fatalf("subscribe: %v", err)
-		}
-		g.Go(func() error { return a.Start(gCtx, sub) })
+		g.Go(func() error { return pipeline.Run(gCtx) })
 
 		time.Sleep(1 * time.Second)
 
@@ -65,9 +69,10 @@ func TestScenario_DLQCommands(t *testing.T) {
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			records, err = store.List(ctx, dlq.ListFilter{})
+			var listErr error
+			records, listErr = store.List(ctx, dlq.ListFilter{})
 			cancel()
-			if err == nil && len(records) > 0 {
+			if listErr == nil && len(records) > 0 {
 				break
 			}
 			time.Sleep(200 * time.Millisecond)

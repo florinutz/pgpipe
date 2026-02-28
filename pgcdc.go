@@ -14,6 +14,8 @@ import (
 
 	"github.com/florinutz/pgcdc/ack"
 	"github.com/florinutz/pgcdc/adapter"
+	"github.com/florinutz/pgcdc/adapter/batch"
+	"github.com/florinutz/pgcdc/adapter/middleware"
 	"github.com/florinutz/pgcdc/backpressure"
 	"github.com/florinutz/pgcdc/bus"
 	"github.com/florinutz/pgcdc/checkpoint"
@@ -103,6 +105,9 @@ type Pipeline struct {
 
 	// Shutdown timeout for graceful drain.
 	shutdownTimeout time.Duration
+
+	// Per-adapter middleware configuration.
+	middlewareConfigs map[string]middleware.Config
 }
 
 // Option configures a Pipeline.
@@ -233,6 +238,18 @@ func WithShutdownTimeout(d time.Duration) Option {
 	}
 }
 
+// WithMiddlewareConfig sets the middleware configuration for a specific adapter.
+// Adapters implementing adapter.Deliverer will use this config for their
+// middleware stack (retry, circuit breaker, rate limiting).
+func WithMiddlewareConfig(adapterName string, cfg middleware.Config) Option {
+	return func(p *Pipeline) {
+		if p.middlewareConfigs == nil {
+			p.middlewareConfigs = make(map[string]middleware.Config)
+		}
+		p.middlewareConfigs[adapterName] = cfg
+	}
+}
+
 // NewPipeline creates a Pipeline that will use the given detector and options.
 // Call Run to start the pipeline.
 func NewPipeline(det detector.Detector, opts ...Option) *Pipeline {
@@ -255,15 +272,25 @@ func NewPipeline(det detector.Detector, opts ...Option) *Pipeline {
 		p.health.Register("bus")
 	}
 
-	// Wire tracer into adapters.
+	// Wire tracer and DLQ into adapters.
+	// Deliverer/Batcher adapters get these via middleware/batch runner instead.
 	tracer := p.tracerProvider.Tracer("github.com/florinutz/pgcdc")
 	for _, a := range p.adapters {
 		p.health.Register(a.Name())
-		if da, ok := a.(adapter.DLQAware); ok && p.dlq != nil {
-			da.SetDLQ(p.dlq)
+		isMiddlewareManaged := false
+		if _, ok := a.(adapter.Deliverer); ok {
+			isMiddlewareManaged = true
 		}
-		if ta, ok := a.(adapter.Traceable); ok {
-			ta.SetTracer(tracer)
+		if _, ok := a.(adapter.Batcher); ok {
+			isMiddlewareManaged = true
+		}
+		if !isMiddlewareManaged {
+			if da, ok := a.(adapter.DLQAware); ok && p.dlq != nil {
+				da.SetDLQ(p.dlq)
+			}
+			if ta, ok := a.(adapter.Traceable); ok {
+				ta.SetTracer(tracer)
+			}
 		}
 	}
 	if p.backpressureCtrl != nil {
@@ -271,11 +298,25 @@ func NewPipeline(det detector.Detector, opts ...Option) *Pipeline {
 	}
 
 	// Set up cooperative checkpointing.
+	// Deliverer/Batcher adapters get ack via middleware/batch runner.
 	if p.cooperativeCheckpoint {
 		p.ackTracker = ack.New()
 		p.autoAckAdapters = make(map[string]bool)
 		for _, a := range p.adapters {
 			p.ackTracker.Register(a.Name(), 0)
+
+			// Middleware-managed adapters get ack from startAdapter.
+			isMiddlewareManaged := false
+			if _, ok := a.(adapter.Deliverer); ok {
+				isMiddlewareManaged = true
+			}
+			if _, ok := a.(adapter.Batcher); ok {
+				isMiddlewareManaged = true
+			}
+			if isMiddlewareManaged {
+				continue
+			}
+
 			if ackable, ok := a.(adapter.Acknowledger); ok {
 				name := a.Name()
 				ackable.SetAckFunc(func(lsn uint64) {
@@ -448,7 +489,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 			p.logger.Info("adapter started", "adapter", a.Name())
 			p.health.SetStatus(a.Name(), health.StatusUp)
 			defer p.health.SetStatus(a.Name(), health.StatusDown)
-			return a.Start(gCtx, sub)
+			return p.startAdapter(gCtx, a, sub)
 		})
 	}
 
@@ -594,6 +635,55 @@ func (p *Pipeline) wrapSubscription(name string, inCh <-chan event.Event, cfgPtr
 	return out
 }
 
+// startAdapter dispatches to the appropriate execution strategy:
+//  1. Batcher adapters → batch.Runner (timer/size flush, DLQ, ack)
+//  2. Deliverer adapters → middleware chain (retry, CB, RL, DLQ, tracing, ack)
+//  3. Legacy adapters → direct Start() call (SSE, WS, gRPC, kafkaserver, view)
+func (p *Pipeline) startAdapter(ctx context.Context, a adapter.Adapter, events <-chan event.Event) error {
+	tracer := p.tracerProvider.Tracer("github.com/florinutz/pgcdc")
+
+	// Path 1: Batcher adapters get the batch runner.
+	if b, ok := a.(adapter.Batcher); ok {
+		cfg := b.BatchConfig()
+		runner := batch.New(a.Name(), b, cfg.MaxSize, cfg.FlushInterval, p.logger)
+		if p.dlq != nil {
+			runner.SetDLQ(p.dlq)
+		}
+		if p.cooperativeCheckpoint && p.ackTracker != nil {
+			name := a.Name()
+			runner.SetAckFunc(func(lsn uint64) {
+				p.ackTracker.Ack(name, lsn)
+			})
+		}
+		return runner.Start(ctx, events)
+	}
+
+	// Path 2: Deliverer adapters get the middleware chain.
+	if d, ok := a.(adapter.Deliverer); ok {
+		mwCfg := p.middlewareConfigs[a.Name()]
+
+		var mwOpts []middleware.Option
+		mwOpts = append(mwOpts, middleware.WithDeliver(d.Deliver))
+		mwOpts = append(mwOpts, middleware.WithLogger(p.logger.With("adapter", a.Name())))
+		mwOpts = append(mwOpts, middleware.WithTracer(tracer))
+		if p.dlq != nil {
+			mwOpts = append(mwOpts, middleware.WithDLQ(p.dlq))
+		}
+		if p.cooperativeCheckpoint && p.ackTracker != nil {
+			name := a.Name()
+			mwOpts = append(mwOpts, middleware.WithAckFunc(func(lsn uint64) {
+				p.ackTracker.Ack(name, lsn)
+			}))
+		}
+
+		chain := middleware.Build(a.Name(), mwCfg, mwOpts...)
+		return middleware.StartLoop(ctx, events, chain, p.logger.With("adapter", a.Name()))
+	}
+
+	// Path 3: Legacy adapters (brokers/servers) use Start() directly.
+	return a.Start(ctx, events)
+}
+
 // Reload atomically swaps the transform chains and route filters for all
 // running adapters. It is safe to call from any goroutine (e.g. a SIGHUP
 // handler). Unknown adapter names in the config are silently ignored.
@@ -681,7 +771,7 @@ func (p *Pipeline) RunSnapshot(ctx context.Context) error {
 			p.logger.Info("adapter started", "adapter", a.Name())
 			p.health.SetStatus(a.Name(), health.StatusUp)
 			defer p.health.SetStatus(a.Name(), health.StatusDown)
-			return a.Start(gCtx, sub)
+			return p.startAdapter(gCtx, a, sub)
 		})
 	}
 

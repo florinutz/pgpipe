@@ -25,7 +25,7 @@ func TestScenario_MultiAdapterFanOut(t *testing.T) {
 
 		startPipeline(t, connStr, []string{"fanout_happy"},
 			stdout.New(capture, testLogger()),
-			webhook.New(receiver.Server.URL, nil, "", 1, 0, 0, 0, 0, 0, 0, 0, testLogger()),
+			webhook.New(receiver.Server.URL, nil, "", 1, 0, 0, 0, testLogger()),
 		)
 		time.Sleep(1 * time.Second)
 
@@ -70,7 +70,7 @@ func TestScenario_MultiAdapterFanOut(t *testing.T) {
 
 		startPipeline(t, connStr, []string{"fanout_slow"},
 			stdout.New(capture, testLogger()),
-			webhook.New(slowServer.URL, nil, "", 1, 0, 0, 0, 0, 0, 0, 0, testLogger()),
+			webhook.New(slowServer.URL, nil, "", 1, 0, 0, 0, testLogger()),
 		)
 		time.Sleep(1 * time.Second)
 

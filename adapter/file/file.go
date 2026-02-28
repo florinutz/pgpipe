@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/metrics"
@@ -17,13 +18,19 @@ const (
 )
 
 // Adapter writes events as JSON lines to a file with optional rotation.
+//
+// Implements adapter.Deliverer — the middleware stack provides the event loop,
+// metrics, and cooperative checkpoint ack.
 type Adapter struct {
 	path     string
 	maxSize  int64
 	maxFiles int
 	logger   *slog.Logger
-	f        *os.File
-	enc      *json.Encoder
+
+	mu   sync.Mutex
+	f    *os.File
+	enc  *json.Encoder
+	init bool
 }
 
 // New creates a file adapter. maxSize is the max file size before rotation
@@ -52,40 +59,55 @@ func (a *Adapter) Name() string {
 	return "file"
 }
 
-// Start blocks, consuming events and writing them as JSON lines to the file.
-func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
-	a.logger.Info("file adapter started", "path", a.path)
+// Deliver writes a single event as a JSON line. Implements adapter.Deliverer.
+// Lazily opens the file on first call.
+func (a *Adapter) Deliver(_ context.Context, ev event.Event) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-	if err := a.open(); err != nil {
-		return fmt.Errorf("file adapter open: %w", err)
+	if !a.init {
+		if err := a.open(); err != nil {
+			return fmt.Errorf("open: %w", err)
+		}
+		a.init = true
 	}
-	defer a.close()
 
+	if err := a.enc.Encode(ev); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	if err := a.f.Sync(); err != nil {
+		a.logger.Warn("failed to sync file", "error", err)
+	} else {
+		metrics.EventsDelivered.WithLabelValues("file").Inc()
+	}
+
+	return a.maybeRotate()
+}
+
+// Start is the legacy event loop kept for backward compatibility.
+func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
+	a.logger.Info("file adapter started (legacy path)", "path", a.path)
 	for {
 		select {
 		case <-ctx.Done():
-			a.logger.Info("file adapter stopping", "reason", "context cancelled")
+			a.close()
 			return ctx.Err()
-
 		case ev, ok := <-events:
 			if !ok {
-				a.logger.Info("file adapter stopping", "reason", "channel closed")
+				a.close()
 				return nil
 			}
-			if err := a.enc.Encode(ev); err != nil {
-				return fmt.Errorf("file adapter write: %w", err)
-			}
-			if err := a.f.Sync(); err != nil {
-				a.logger.Warn("failed to sync file", "error", err)
-			} else {
-				metrics.EventsDelivered.WithLabelValues("file").Inc()
-			}
-
-			if err := a.maybeRotate(); err != nil {
-				return fmt.Errorf("file adapter rotation: %w", err)
+			if err := a.Deliver(ctx, ev); err != nil {
+				return err
 			}
 		}
 	}
+}
+
+// Drain closes the file on graceful shutdown.
+func (a *Adapter) Drain(_ context.Context) error {
+	a.close()
+	return nil
 }
 
 func (a *Adapter) open() error {
@@ -99,8 +121,12 @@ func (a *Adapter) open() error {
 }
 
 func (a *Adapter) close() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.f != nil {
 		_ = a.f.Close()
+		a.f = nil
+		a.init = false
 	}
 }
 
@@ -116,7 +142,9 @@ func (a *Adapter) maybeRotate() error {
 }
 
 func (a *Adapter) rotate() error {
-	a.close()
+	if a.f != nil {
+		_ = a.f.Close()
+	}
 
 	// Remove the oldest rotated file.
 	oldest := fmt.Sprintf("%s.%d", a.path, a.maxFiles)

@@ -13,7 +13,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for missing --db")
 		}
-		if !strings.Contains(output, "no database URL") {
+		if !strings.Contains(output, "database_url is required") {
 			t.Errorf("unexpected output: %s", output)
 		}
 	})
@@ -43,7 +43,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for --tx-metadata without WAL")
 		}
-		if !strings.Contains(output, "--tx-metadata and --tx-markers require --detector wal") {
+		if !strings.Contains(output, "tx-metadata requires --detector wal") {
 			t.Errorf("unexpected output: %s", output)
 		}
 	})
@@ -53,7 +53,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for --tx-markers without WAL")
 		}
-		if !strings.Contains(output, "--tx-metadata and --tx-markers require --detector wal") {
+		if !strings.Contains(output, "tx-markers requires --detector wal") {
 			t.Errorf("unexpected output: %s", output)
 		}
 	})
@@ -63,7 +63,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for webhook without URL")
 		}
-		if !strings.Contains(output, "webhook adapter requires a URL") {
+		if !strings.Contains(output, "webhook.url is required") {
 			t.Errorf("unexpected output: %s", output)
 		}
 	})
@@ -73,7 +73,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for --snapshot-first without WAL")
 		}
-		if !strings.Contains(output, "--snapshot-first requires --detector wal") {
+		if !strings.Contains(output, "snapshot-first requires --detector wal") {
 			t.Errorf("unexpected output: %s", output)
 		}
 	})
@@ -83,7 +83,7 @@ func TestScenario_CLIValidation(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for --snapshot-first without --snapshot-table")
 		}
-		if !strings.Contains(output, "--snapshot-first requires --snapshot-table") {
+		if !strings.Contains(output, "snapshot-first requires a snapshot table") {
 			t.Errorf("unexpected output: %s", output)
 		}
 	})

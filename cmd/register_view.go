@@ -4,26 +4,33 @@ package cmd
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 
-	"github.com/florinutz/pgcdc/adapter"
 	viewadapter "github.com/florinutz/pgcdc/adapter/view"
 	"github.com/florinutz/pgcdc/internal/config"
+	"github.com/florinutz/pgcdc/registry"
 	"github.com/florinutz/pgcdc/view"
 )
 
-func makeViewAdapter(cfg config.Config, logger *slog.Logger) (adapter.Adapter, error) {
-	defs, err := parseViewConfigs(cfg.Views)
-	if err != nil {
-		return nil, err
-	}
-	if len(defs) == 0 {
-		return nil, fmt.Errorf("view adapter requires at least one view definition in views: config")
-	}
+func init() {
+	registry.RegisterAdapter(registry.AdapterEntry{
+		Name:        "view",
+		Description: "Streaming SQL view engine (tumbling/sliding/session windows)",
+		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
+			defs, err := parseViewConfigs(ctx.Cfg.Views)
+			if err != nil {
+				return registry.AdapterResult{}, err
+			}
+			if len(defs) == 0 {
+				return registry.AdapterResult{}, fmt.Errorf("view adapter requires at least one view definition in views: config")
+			}
 
-	engine := view.NewEngine(defs, logger)
-	return viewadapter.New(engine, logger), nil
+			engine := view.NewEngine(defs, ctx.Logger)
+			return registry.AdapterResult{
+				Adapter: viewadapter.New(engine, ctx.Logger),
+			}, nil
+		},
+	})
 }
 
 func parseViewConfigs(views []config.ViewConfig) ([]*view.ViewDef, error) {
@@ -36,7 +43,6 @@ func parseViewConfigs(views []config.ViewConfig) ([]*view.ViewDef, error) {
 			return nil, fmt.Errorf("view %q missing query", vc.Name)
 		}
 
-		// Validate view name doesn't reference view channels.
 		if strings.Contains(vc.Query, "pgcdc:_view:") {
 			return nil, fmt.Errorf("view %q: WHERE clause must not reference pgcdc:_view: channels (loop prevention)", vc.Name)
 		}

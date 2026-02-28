@@ -15,8 +15,8 @@ import (
 // nil when ctx is cancelled.
 func Loop(ctx context.Context, name string, base, max time.Duration,
 	logger *slog.Logger, errCounter prometheus.Counter,
-	runFn func(ctx context.Context) error) error {
-
+	runFn func(ctx context.Context) error,
+) error {
 	if logger == nil {
 		logger = slog.Default()
 	}

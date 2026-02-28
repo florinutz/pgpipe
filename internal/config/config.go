@@ -7,45 +7,46 @@ import (
 )
 
 type Config struct {
-	DatabaseURL         string                    `mapstructure:"database_url"`
-	Channels            []string                  `mapstructure:"channels"`
-	Adapters            []string                  `mapstructure:"adapters"`
-	LogLevel            string                    `mapstructure:"log_level"`
-	LogFormat           string                    `mapstructure:"log_format"`
-	ShutdownTimeout     time.Duration             `mapstructure:"shutdown_timeout"`
-	MetricsAddr         string                    `mapstructure:"metrics_addr"`
-	SkipValidation      bool                      `mapstructure:"skip_validation"`
-	SkipMigrations      bool                      `mapstructure:"skip_migrations"`
-	Bus                 BusConfig                 `mapstructure:"bus"`
-	Webhook             WebhookConfig             `mapstructure:"webhook"`
-	SSE                 SSEConfig                 `mapstructure:"sse"`
-	File                FileConfig                `mapstructure:"file"`
-	Exec                ExecConfig                `mapstructure:"exec"`
-	PGTable             PGTableConfig             `mapstructure:"pg_table"`
-	WebSocket           WebSocketConfig           `mapstructure:"websocket"`
-	Detector            DetectorConfig            `mapstructure:"detector"`
-	Snapshot            SnapshotConfig            `mapstructure:"snapshot"`
-	Embedding           EmbeddingConfig           `mapstructure:"embedding"`
-	Iceberg             IcebergConfig             `mapstructure:"iceberg"`
-	Nats                NatsConfig                `mapstructure:"nats"`
-	Outbox              OutboxConfig              `mapstructure:"outbox"`
-	DLQ                 DLQConfig                 `mapstructure:"dlq"`
-	Search              SearchConfig              `mapstructure:"search"`
-	Redis               RedisConfig               `mapstructure:"redis"`
-	GRPC                GRPCConfig                `mapstructure:"grpc"`
-	Kafka               KafkaConfig               `mapstructure:"kafka"`
-	S3                  S3Config                  `mapstructure:"s3"`
-	IncrementalSnapshot IncrementalSnapshotConfig `mapstructure:"incremental_snapshot"`
-	Transforms          TransformConfig           `mapstructure:"transforms"`
-	Routes              map[string][]string       `mapstructure:"routes"` // adapter -> channels
-	Backpressure        BackpressureConfig        `mapstructure:"backpressure"`
-	Plugins             PluginConfig              `mapstructure:"plugins"`
-	Encoding            EncodingConfig            `mapstructure:"encoding"`
-	MySQL               MySQLConfig               `mapstructure:"mysql"`
-	MongoDB             MongoDBConfig             `mapstructure:"mongodb"`
-	OTel                OTelConfig                `mapstructure:"otel"`
-	KafkaServer         KafkaServerConfig         `mapstructure:"kafkaserver"`
-	Views               []ViewConfig              `mapstructure:"views"`
+	DatabaseURL         string                      `mapstructure:"database_url"`
+	Channels            []string                    `mapstructure:"channels"`
+	Adapters            []string                    `mapstructure:"adapters"`
+	LogLevel            string                      `mapstructure:"log_level"`
+	LogFormat           string                      `mapstructure:"log_format"`
+	ShutdownTimeout     time.Duration               `mapstructure:"shutdown_timeout"`
+	MetricsAddr         string                      `mapstructure:"metrics_addr"`
+	SkipValidation      bool                        `mapstructure:"skip_validation"`
+	SkipMigrations      bool                        `mapstructure:"skip_migrations"`
+	Bus                 BusConfig                   `mapstructure:"bus"`
+	Webhook             WebhookConfig               `mapstructure:"webhook"`
+	SSE                 SSEConfig                   `mapstructure:"sse"`
+	File                FileConfig                  `mapstructure:"file"`
+	Exec                ExecConfig                  `mapstructure:"exec"`
+	PGTable             PGTableConfig               `mapstructure:"pg_table"`
+	WebSocket           WebSocketConfig             `mapstructure:"websocket"`
+	Detector            DetectorConfig              `mapstructure:"detector"`
+	Snapshot            SnapshotConfig              `mapstructure:"snapshot"`
+	Embedding           EmbeddingConfig             `mapstructure:"embedding"`
+	Iceberg             IcebergConfig               `mapstructure:"iceberg"`
+	Nats                NatsConfig                  `mapstructure:"nats"`
+	Outbox              OutboxConfig                `mapstructure:"outbox"`
+	DLQ                 DLQConfig                   `mapstructure:"dlq"`
+	Search              SearchConfig                `mapstructure:"search"`
+	Redis               RedisConfig                 `mapstructure:"redis"`
+	GRPC                GRPCConfig                  `mapstructure:"grpc"`
+	Kafka               KafkaConfig                 `mapstructure:"kafka"`
+	S3                  S3Config                    `mapstructure:"s3"`
+	IncrementalSnapshot IncrementalSnapshotConfig   `mapstructure:"incremental_snapshot"`
+	Transforms          TransformConfig             `mapstructure:"transforms"`
+	Routes              map[string][]string         `mapstructure:"routes"` // adapter -> channels
+	Backpressure        BackpressureConfig          `mapstructure:"backpressure"`
+	Plugins             PluginConfig                `mapstructure:"plugins"`
+	Encoding            EncodingConfig              `mapstructure:"encoding"`
+	MySQL               MySQLConfig                 `mapstructure:"mysql"`
+	MongoDB             MongoDBConfig               `mapstructure:"mongodb"`
+	OTel                OTelConfig                  `mapstructure:"otel"`
+	KafkaServer         KafkaServerConfig           `mapstructure:"kafkaserver"`
+	Views               []ViewConfig                `mapstructure:"views"`
+	Middleware          map[string]MiddlewareConfig `mapstructure:"middleware"` // adapter name -> middleware config
 }
 
 type OTelConfig struct {
@@ -371,6 +372,28 @@ type ViewConfig struct {
 	Query     string `mapstructure:"query"`
 	Emit      string `mapstructure:"emit"`       // "row" (default) or "batch"
 	MaxGroups int    `mapstructure:"max_groups"` // default 100000
+}
+
+type MiddlewareConfig struct {
+	Retry          *MiddlewareRetryConfig          `mapstructure:"retry"`
+	CircuitBreaker *MiddlewareCircuitBreakerConfig `mapstructure:"circuit_breaker"`
+	RateLimit      *MiddlewareRateLimitConfig      `mapstructure:"rate_limit"`
+}
+
+type MiddlewareRetryConfig struct {
+	MaxRetries  int           `mapstructure:"max_retries"`
+	BackoffBase time.Duration `mapstructure:"backoff_base"`
+	BackoffCap  time.Duration `mapstructure:"backoff_cap"`
+}
+
+type MiddlewareCircuitBreakerConfig struct {
+	MaxFailures  int           `mapstructure:"max_failures"`
+	ResetTimeout time.Duration `mapstructure:"reset_timeout"`
+}
+
+type MiddlewareRateLimitConfig struct {
+	EventsPerSecond float64 `mapstructure:"events_per_second"`
+	Burst           int     `mapstructure:"burst"`
 }
 
 type EncodingConfig struct {
