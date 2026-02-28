@@ -11,7 +11,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/reconnect"
+	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/jackc/pgx/v5"
 )
@@ -74,32 +75,19 @@ func (d *Detector) Start(ctx context.Context, events chan<- event.Event) error {
 		return fmt.Errorf("listennotify: no channels configured")
 	}
 
-	var attempt int
-	for {
-		runErr := d.run(ctx, events)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		disconnErr := &pgcdcerr.DetectorDisconnectedError{
-			Source: source,
-			Err:    runErr,
-		}
-
-		delay := backoff.Jitter(attempt, d.backoffBase, d.backoffCap)
-		d.logger.Error("connection lost, reconnecting",
-			"error", disconnErr,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
+	return reconnect.Loop(ctx, d.Name(), d.backoffBase, d.backoffCap,
+		d.logger, metrics.ListenNotifyErrors,
+		func(ctx context.Context) error {
+			err := d.run(ctx, events)
+			if err != nil {
+				return &pgcdcerr.DetectorDisconnectedError{
+					Source: source,
+					Err:    err,
+				}
+			}
+			return nil
+		},
+	)
 }
 
 // run performs a single connect-listen-receive cycle.

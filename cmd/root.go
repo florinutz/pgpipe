@@ -110,3 +110,18 @@ func mustBindPFlag(key string, flag *pflag.Flag) {
 		panic(fmt.Sprintf("viper.BindPFlag(%q): %v", key, err))
 	}
 }
+
+// bindFlagsToViper binds a list of flag→viper-key pairs. Flags that don't exist
+// (e.g., build-tagged out) are silently skipped.
+func bindFlagsToViper(f *pflag.FlagSet, bindings [][2]string) error {
+	for _, b := range bindings {
+		flag := f.Lookup(b[0])
+		if flag == nil {
+			continue
+		}
+		if err := viper.BindPFlag(b[1], flag); err != nil {
+			return fmt.Errorf("bind flag %q to %q: %w", b[0], b[1], err)
+		}
+	}
+	return nil
+}

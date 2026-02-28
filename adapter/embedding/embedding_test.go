@@ -12,7 +12,6 @@ func TestEmbeddingAdapter_Name(t *testing.T) {
 		[]string{"title", "body"}, "",
 		"postgres://test", "", 0, 0, 0, 0, 0,
 		false,
-		0, 0, 0, 0,
 		nil,
 	)
 	if got := a.Name(); got != "embedding" {

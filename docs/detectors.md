@@ -1,6 +1,6 @@
 # Detectors
 
-pgcdc supports three event source types (detectors).
+pgcdc supports five event source types (detectors).
 
 ## LISTEN/NOTIFY
 
@@ -87,3 +87,42 @@ Options:
 - `--outbox-keep-processed` — UPDATE instead of DELETE (set `processed_at`)
 
 Uses `SELECT ... FOR UPDATE SKIP LOCKED` for safe concurrent processing.
+
+## MySQL Binlog
+
+Connects to MySQL as a replication slave to capture changes from the binlog (ROW format required).
+
+**Pros**: Native CDC from MySQL. No triggers. Captures INSERT/UPDATE/DELETE.
+**Cons**: Requires `binlog_format=ROW`. Needs a unique `server_id`.
+
+```bash
+pgcdc listen --detector mysql \
+  --mysql-addr localhost:3306 --mysql-user replicator --mysql-password secret \
+  --mysql-server-id 100
+```
+
+Options:
+- `--mysql-tables schema.table` — filter by schema.table pattern
+- `--mysql-gtid` — use GTID-based replication
+- `--mysql-flavor mysql|mariadb` — MySQL or MariaDB flavor
+
+Events are emitted on `pgcdc:<schema>.<table>` channels.
+
+## MongoDB Change Streams
+
+Uses MongoDB's native Change Streams API (requires replica set or sharded cluster).
+
+**Pros**: Native CDC from MongoDB. No polling. Captures insert/update/replace/delete.
+**Cons**: Requires replica set or sharded cluster. No cooperative checkpoint or backpressure support.
+
+```bash
+pgcdc listen --detector mongodb \
+  --mongodb-uri mongodb://localhost:27017 --mongodb-database mydb
+```
+
+Options:
+- `--mongodb-scope collection|database|cluster` — watch scope
+- `--mongodb-collections coll1,coll2` — collection filter
+- `--mongodb-full-document updateLookup|default` — full document lookup on updates
+
+Resume tokens are persisted to a MongoDB metadata collection for crash-resumable streaming.

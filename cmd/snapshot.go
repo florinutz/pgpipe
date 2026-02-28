@@ -36,7 +36,8 @@ through the configured adapters.
 
 This is useful for initial data synchronization before switching to live
 change capture with 'pgcdc listen'.`,
-	RunE: runSnapshot,
+	PreRunE: bindSnapshotFlags,
+	RunE:    runSnapshot,
 }
 
 func init() {
@@ -107,107 +108,89 @@ func init() {
 	f.StringSlice("drop-columns", nil, "global: drop these columns from event payloads (repeatable)")
 	f.StringSlice("filter-operations", nil, "global: only pass events with these operations (e.g. INSERT,UPDATE)")
 
-	// Only bind snapshot-specific keys that don't collide with listen.
-	mustBindPFlag("snapshot.table", f.Lookup("table"))
-	mustBindPFlag("snapshot.where", f.Lookup("where"))
-	mustBindPFlag("snapshot.batch_size", f.Lookup("batch-size"))
-
 	rootCmd.AddCommand(snapshotCmd)
+}
+
+// bindSnapshotFlags binds all snapshot command flags to viper keys. Called in
+// PreRunE so only the active command's bindings are established.
+func bindSnapshotFlags(cmd *cobra.Command, _ []string) error {
+	return bindFlagsToViper(cmd.Flags(), [][2]string{
+		// Core.
+		{"db", "database_url"},
+		{"adapter", "adapters"},
+
+		// Snapshot.
+		{"table", "snapshot.table"},
+		{"where", "snapshot.where"},
+		{"batch-size", "snapshot.batch_size"},
+
+		// Webhook.
+		{"url", "webhook.url"},
+		{"retries", "webhook.max_retries"},
+		{"signing-key", "webhook.signing_key"},
+
+		// File.
+		{"file-path", "file.path"},
+		{"file-max-size", "file.max_size"},
+		{"file-max-files", "file.max_files"},
+
+		// Exec.
+		{"exec-command", "exec.command"},
+
+		// PG table.
+		{"pg-table-url", "pg_table.url"},
+		{"pg-table-name", "pg_table.table"},
+
+		// Embedding.
+		{"embedding-api-url", "embedding.api_url"},
+		{"embedding-api-key", "embedding.api_key"},
+		{"embedding-model", "embedding.model"},
+		{"embedding-columns", "embedding.columns"},
+		{"embedding-id-column", "embedding.id_column"},
+		{"embedding-table", "embedding.table"},
+		{"embedding-db-url", "embedding.db_url"},
+		{"embedding-dimension", "embedding.dimension"},
+
+		// Iceberg.
+		{"iceberg-catalog", "iceberg.catalog_type"},
+		{"iceberg-catalog-uri", "iceberg.catalog_uri"},
+		{"iceberg-warehouse", "iceberg.warehouse"},
+		{"iceberg-namespace", "iceberg.namespace"},
+		{"iceberg-table", "iceberg.table"},
+		{"iceberg-mode", "iceberg.mode"},
+		{"iceberg-schema", "iceberg.schema_mode"},
+		{"iceberg-pk", "iceberg.primary_keys"},
+		{"iceberg-flush-interval", "iceberg.flush_interval"},
+		{"iceberg-flush-size", "iceberg.flush_size"},
+
+		// NATS.
+		{"nats-url", "nats.url"},
+		{"nats-subject", "nats.subject"},
+		{"nats-stream", "nats.stream"},
+		{"nats-cred-file", "nats.cred_file"},
+		{"nats-max-age", "nats.max_age"},
+
+		// Search.
+		{"search-engine", "search.engine"},
+		{"search-url", "search.url"},
+		{"search-api-key", "search.api_key"},
+		{"search-index", "search.index"},
+		{"search-id-column", "search.id_column"},
+		{"search-batch-size", "search.batch_size"},
+		{"search-batch-interval", "search.batch_interval"},
+
+		// Redis.
+		{"redis-url", "redis.url"},
+		{"redis-mode", "redis.mode"},
+		{"redis-key-prefix", "redis.key_prefix"},
+		{"redis-id-column", "redis.id_column"},
+	})
 }
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
 	cfg := config.Default()
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
-	}
-
-	// Read flags directly to avoid viper key collisions with listen command.
-	if db, _ := cmd.Flags().GetString("db"); db != "" {
-		cfg.DatabaseURL = db
-	}
-	if adapters, _ := cmd.Flags().GetStringSlice("adapter"); len(adapters) > 0 {
-		cfg.Adapters = adapters
-	}
-	if v, _ := cmd.Flags().GetString("url"); v != "" {
-		cfg.Webhook.URL = v
-	}
-	if v, _ := cmd.Flags().GetInt("retries"); cmd.Flags().Changed("retries") {
-		cfg.Webhook.MaxRetries = v
-	}
-	if v, _ := cmd.Flags().GetString("signing-key"); v != "" {
-		cfg.Webhook.SigningKey = v
-	}
-	if v, _ := cmd.Flags().GetString("file-path"); v != "" {
-		cfg.File.Path = v
-	}
-	if v, _ := cmd.Flags().GetInt64("file-max-size"); v > 0 {
-		cfg.File.MaxSize = v
-	}
-	if v, _ := cmd.Flags().GetInt("file-max-files"); v > 0 {
-		cfg.File.MaxFiles = v
-	}
-	if v, _ := cmd.Flags().GetString("exec-command"); v != "" {
-		cfg.Exec.Command = v
-	}
-	if v, _ := cmd.Flags().GetString("pg-table-url"); v != "" {
-		cfg.PGTable.URL = v
-	}
-	if v, _ := cmd.Flags().GetString("pg-table-name"); v != "" {
-		cfg.PGTable.Table = v
-	}
-	if v, _ := cmd.Flags().GetString("embedding-api-url"); v != "" {
-		cfg.Embedding.APIURL = v
-	}
-	if v, _ := cmd.Flags().GetString("embedding-api-key"); v != "" {
-		cfg.Embedding.APIKey = v
-	}
-	if v, _ := cmd.Flags().GetString("embedding-model"); v != "" {
-		cfg.Embedding.Model = v
-	}
-	if v, _ := cmd.Flags().GetStringSlice("embedding-columns"); len(v) > 0 {
-		cfg.Embedding.Columns = v
-	}
-	if v, _ := cmd.Flags().GetString("embedding-id-column"); v != "" {
-		cfg.Embedding.IDColumn = v
-	}
-	if v, _ := cmd.Flags().GetString("embedding-table"); v != "" {
-		cfg.Embedding.Table = v
-	}
-	if v, _ := cmd.Flags().GetString("embedding-db-url"); v != "" {
-		cfg.Embedding.DBURL = v
-	}
-	if v, _ := cmd.Flags().GetInt("embedding-dimension"); v > 0 {
-		cfg.Embedding.Dimension = v
-	}
-	if v, _ := cmd.Flags().GetString("iceberg-catalog"); cmd.Flags().Changed("iceberg-catalog") {
-		cfg.Iceberg.CatalogType = v
-	}
-	if v, _ := cmd.Flags().GetString("iceberg-catalog-uri"); v != "" {
-		cfg.Iceberg.CatalogURI = v
-	}
-	if v, _ := cmd.Flags().GetString("iceberg-warehouse"); v != "" {
-		cfg.Iceberg.Warehouse = v
-	}
-	if v, _ := cmd.Flags().GetString("iceberg-namespace"); cmd.Flags().Changed("iceberg-namespace") {
-		cfg.Iceberg.Namespace = v
-	}
-	if v, _ := cmd.Flags().GetString("iceberg-table"); v != "" {
-		cfg.Iceberg.Table = v
-	}
-	if v, _ := cmd.Flags().GetString("iceberg-mode"); cmd.Flags().Changed("iceberg-mode") {
-		cfg.Iceberg.Mode = v
-	}
-	if v, _ := cmd.Flags().GetString("iceberg-schema"); cmd.Flags().Changed("iceberg-schema") {
-		cfg.Iceberg.SchemaMode = v
-	}
-	if v, _ := cmd.Flags().GetStringSlice("iceberg-pk"); len(v) > 0 {
-		cfg.Iceberg.PrimaryKeys = v
-	}
-	if v, _ := cmd.Flags().GetDuration("iceberg-flush-interval"); v > 0 {
-		cfg.Iceberg.FlushInterval = v
-	}
-	if v, _ := cmd.Flags().GetInt("iceberg-flush-size"); v > 0 {
-		cfg.Iceberg.FlushSize = v
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -218,132 +201,52 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 
 	// Validate adapters (SSE and WS don't make sense for snapshot).
-	hasWebhook := false
-	hasFile := false
-	hasExec := false
-	hasPGTable := false
-	hasEmbedding := false
-	hasIceberg := false
-	hasNats := false
-	hasSearch := false
-	hasRedis := false
+	adapterSet := make(map[string]bool, len(cfg.Adapters))
 	for _, name := range cfg.Adapters {
 		switch name {
-		case "stdout":
-			// ok
-		case "webhook":
-			hasWebhook = true
-		case "file":
-			hasFile = true
-		case "exec":
-			hasExec = true
-		case "pg_table":
-			hasPGTable = true
-		case "embedding":
-			hasEmbedding = true
-		case "iceberg":
-			hasIceberg = true
-		case "nats":
-			hasNats = true
-		case "search":
-			hasSearch = true
-		case "redis":
-			hasRedis = true
+		case "stdout", "webhook", "file", "exec", "pg_table", "embedding", "iceberg", "nats", "search", "redis":
+			adapterSet[name] = true
 		case "sse", "ws", "grpc":
 			return fmt.Errorf("adapter %q is not supported for snapshot (use stdout, webhook, file, exec, pg_table, embedding, iceberg, nats, search, or redis)", name)
 		default:
 			return fmt.Errorf("unknown adapter: %q", name)
 		}
 	}
-	if hasWebhook && cfg.Webhook.URL == "" {
+	if adapterSet["webhook"] && cfg.Webhook.URL == "" {
 		return fmt.Errorf("webhook adapter requires a URL; use --url or set webhook.url in config")
 	}
-	if hasFile && cfg.File.Path == "" {
+	if adapterSet["file"] && cfg.File.Path == "" {
 		return fmt.Errorf("file adapter requires a path; use --file-path or set file.path in config")
 	}
-	if hasExec && cfg.Exec.Command == "" {
+	if adapterSet["exec"] && cfg.Exec.Command == "" {
 		return fmt.Errorf("exec adapter requires a command; use --exec-command or set exec.command in config")
 	}
-	if hasPGTable && cfg.PGTable.URL == "" && cfg.DatabaseURL == "" {
+	if adapterSet["pg_table"] && cfg.PGTable.URL == "" && cfg.DatabaseURL == "" {
 		return fmt.Errorf("pg_table adapter requires a database URL; use --db or --pg-table-url")
 	}
-	if hasEmbedding && cfg.Embedding.APIURL == "" {
+	if adapterSet["embedding"] && cfg.Embedding.APIURL == "" {
 		return fmt.Errorf("embedding adapter requires an API URL; use --embedding-api-url or set embedding.api_url in config")
 	}
-	if hasEmbedding && len(cfg.Embedding.Columns) == 0 {
+	if adapterSet["embedding"] && len(cfg.Embedding.Columns) == 0 {
 		return fmt.Errorf("embedding adapter requires at least one column; use --embedding-columns or set embedding.columns in config")
 	}
-	if hasIceberg && cfg.Iceberg.Warehouse == "" {
+	if adapterSet["iceberg"] && cfg.Iceberg.Warehouse == "" {
 		return fmt.Errorf("iceberg adapter requires a warehouse; use --iceberg-warehouse or set iceberg.warehouse in config")
 	}
-	if hasIceberg && cfg.Iceberg.Table == "" {
+	if adapterSet["iceberg"] && cfg.Iceberg.Table == "" {
 		return fmt.Errorf("iceberg adapter requires a table name; use --iceberg-table or set iceberg.table in config")
 	}
-
-	if hasSearch {
-		searchURL, _ := cmd.Flags().GetString("search-url")
-		searchIndex, _ := cmd.Flags().GetString("search-index")
-		if searchURL == "" {
-			return fmt.Errorf("search adapter requires a URL; use --search-url")
-		}
-		if searchIndex == "" {
-			return fmt.Errorf("search adapter requires an index; use --search-index")
-		}
-		cfg.Search.URL = searchURL
-		if v, _ := cmd.Flags().GetString("search-engine"); cmd.Flags().Changed("search-engine") {
-			cfg.Search.Engine = v
-		}
-		if v, _ := cmd.Flags().GetString("search-api-key"); v != "" {
-			cfg.Search.APIKey = v
-		}
-		cfg.Search.Index = searchIndex
-		if v, _ := cmd.Flags().GetString("search-id-column"); cmd.Flags().Changed("search-id-column") {
-			cfg.Search.IDColumn = v
-		}
-		if v, _ := cmd.Flags().GetInt("search-batch-size"); cmd.Flags().Changed("search-batch-size") {
-			cfg.Search.BatchSize = v
-		}
-		if v, _ := cmd.Flags().GetDuration("search-batch-interval"); v > 0 {
-			cfg.Search.BatchInterval = v
-		}
+	if adapterSet["search"] && cfg.Search.URL == "" {
+		return fmt.Errorf("search adapter requires a URL; use --search-url")
 	}
-	if hasRedis {
-		redisURL, _ := cmd.Flags().GetString("redis-url")
-		if redisURL == "" {
-			return fmt.Errorf("redis adapter requires a URL; use --redis-url")
-		}
-		cfg.Redis.URL = redisURL
-		if v, _ := cmd.Flags().GetString("redis-mode"); cmd.Flags().Changed("redis-mode") {
-			cfg.Redis.Mode = v
-		}
-		if v, _ := cmd.Flags().GetString("redis-key-prefix"); v != "" {
-			cfg.Redis.KeyPrefix = v
-		}
-		if v, _ := cmd.Flags().GetString("redis-id-column"); cmd.Flags().Changed("redis-id-column") {
-			cfg.Redis.IDColumn = v
-		}
+	if adapterSet["search"] && cfg.Search.Index == "" {
+		return fmt.Errorf("search adapter requires an index; use --search-index")
 	}
-
-	// Read NATS flags directly.
-	if hasNats {
-		if v, _ := cmd.Flags().GetString("nats-url"); v != "" {
-			cfg.Nats.URL = v
-		}
-		if v, _ := cmd.Flags().GetString("nats-subject"); cmd.Flags().Changed("nats-subject") {
-			cfg.Nats.Subject = v
-		}
-		if v, _ := cmd.Flags().GetString("nats-stream"); cmd.Flags().Changed("nats-stream") {
-			cfg.Nats.Stream = v
-		}
-		if v, _ := cmd.Flags().GetString("nats-cred-file"); v != "" {
-			cfg.Nats.CredFile = v
-		}
-		if v, _ := cmd.Flags().GetDuration("nats-max-age"); v > 0 {
-			cfg.Nats.MaxAge = v
-		}
-		if cfg.Nats.URL == "" {
-			return fmt.Errorf("nats adapter requires a URL; use --nats-url or set nats.url in config")
-		}
+	if adapterSet["redis"] && cfg.Redis.URL == "" {
+		return fmt.Errorf("redis adapter requires a URL; use --redis-url")
+	}
+	if adapterSet["nats"] && cfg.Nats.URL == "" {
+		return fmt.Errorf("nats adapter requires a URL; use --nats-url or set nats.url in config")
 	}
 
 	logger := slog.Default()
@@ -400,10 +303,6 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 				cfg.Embedding.BackoffBase,
 				cfg.Embedding.BackoffCap,
 				cfg.Embedding.SkipUnchanged,
-				cfg.Embedding.CBMaxFailures,
-				cfg.Embedding.CBResetTimeout,
-				cfg.Embedding.RateLimit,
-				cfg.Embedding.RateLimitBurst,
 				logger,
 			)))
 		case "iceberg":

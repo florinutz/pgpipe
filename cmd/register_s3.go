@@ -31,5 +31,30 @@ func init() {
 				),
 			}, nil
 		},
+		ViperKeys: [][2]string{
+			{"s3-bucket", "s3.bucket"},
+			{"s3-prefix", "s3.prefix"},
+			{"s3-endpoint", "s3.endpoint"},
+			{"s3-region", "s3.region"},
+			{"s3-access-key-id", "s3.access_key_id"},
+			{"s3-secret-access-key", "s3.secret_access_key"},
+			{"s3-format", "s3.format"},
+			{"s3-flush-interval", "s3.flush_interval"},
+			{"s3-flush-size", "s3.flush_size"},
+			{"s3-drain-timeout", "s3.drain_timeout"},
+		},
 	})
+
+	// S3 adapter flags.
+	f := listenCmd.Flags()
+	f.String("s3-bucket", "", "S3 bucket name")
+	f.String("s3-prefix", "", "S3 object key prefix")
+	f.String("s3-endpoint", "", "S3-compatible endpoint URL (e.g. MinIO, R2)")
+	f.String("s3-region", "us-east-1", "S3 region")
+	f.String("s3-access-key-id", "", "S3 access key ID (default: AWS default chain)")
+	f.String("s3-secret-access-key", "", "S3 secret access key (default: AWS default chain)")
+	f.String("s3-format", "jsonl", "S3 output format: jsonl or parquet")
+	f.Duration("s3-flush-interval", 0, "S3 flush interval (default 1m)")
+	f.Int("s3-flush-size", 0, "S3 flush size in events (default 10000)")
+	f.Duration("s3-drain-timeout", 0, "S3 shutdown drain timeout (default 30s)")
 }

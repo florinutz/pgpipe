@@ -253,6 +253,20 @@ var (
 		Help: "Total number of Kafka transaction errors (aborts).",
 	})
 
+	// Listen/Notify detector metrics.
+
+	ListenNotifyErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_listennotify_errors_total",
+		Help: "Total number of LISTEN/NOTIFY detector reconnect errors.",
+	})
+
+	// WAL replication detector metrics.
+
+	WalReplicationErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_walreplication_errors_total",
+		Help: "Total number of WAL replication detector reconnect errors.",
+	})
+
 	// Outbox metrics.
 
 	OutboxPolled = promauto.NewCounter(prometheus.CounterOpts{

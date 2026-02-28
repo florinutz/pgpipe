@@ -11,16 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
-
-	"github.com/florinutz/pgcdc/adapter"
-	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
-	"github.com/florinutz/pgcdc/internal/circuitbreaker"
-	"github.com/florinutz/pgcdc/internal/ratelimit"
 	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
@@ -42,6 +34,10 @@ const (
 // Adapter extracts text columns from CDC events, embeds them via an
 // OpenAI-compatible API, and UPSERTs the vectors into a pgvector table.
 // DELETE events remove the corresponding vector row.
+//
+// Implements adapter.Deliverer — CB, rate-limit, retry, DLQ, and tracing are
+// provided by the middleware chain configured in the registry entry. The
+// adapter itself handles only HTTP embedding and pgvector persistence.
 type Adapter struct {
 	apiURL        string
 	apiKey        string
@@ -57,24 +53,18 @@ type Adapter struct {
 	skipUnchanged bool
 	client        *http.Client
 	logger        *slog.Logger
-	dlq           dlq.DLQ
-	ackFn         adapter.AckFunc
-	tracer        trace.Tracer
-	cb            *circuitbreaker.CircuitBreaker
-	limiter       *ratelimit.Limiter
+	upsertSQL     string    // precomputed from table name in New()
+	deleteSQL     string    // precomputed from table name in New()
+	conn          *pgx.Conn // persistent connection; lazily initialized in Deliver/run
 }
-
-// SetTracer implements adapter.Traceable.
-func (a *Adapter) SetTracer(t trace.Tracer) { a.tracer = t }
-
-// SetDLQ sets the dead letter queue for failed deliveries.
-func (a *Adapter) SetDLQ(d dlq.DLQ) { a.dlq = d }
 
 // New creates an embedding adapter.
 // apiURL is an OpenAI-compatible endpoint (e.g. https://api.openai.com/v1/embeddings).
 // columns is the list of payload row fields to concatenate for embedding.
 // idColumn is the payload row field used as the source primary key for UPSERT/DELETE.
 // Duration parameters default to sensible values when zero.
+// CB, rate-limit, retry, DLQ, and tracing are handled by the middleware chain — use
+// registry.AdapterResult.MiddlewareConfig to configure them.
 func New(
 	apiURL, apiKey, model string,
 	columns []string,
@@ -84,8 +74,6 @@ func New(
 	maxRetries int,
 	timeout, backoffBase, backoffCap time.Duration,
 	skipUnchanged bool,
-	cbMaxFailures int, cbResetTimeout time.Duration,
-	rateLimit float64, rateBurst int,
 	logger *slog.Logger,
 ) *Adapter {
 	if model == "" {
@@ -115,7 +103,8 @@ func New(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	a := &Adapter{
+	safeTable := pgx.Identifier{table}.Sanitize()
+	return &Adapter{
 		apiURL:        apiURL,
 		apiKey:        apiKey,
 		model:         model,
@@ -130,21 +119,22 @@ func New(
 		skipUnchanged: skipUnchanged,
 		client:        &http.Client{Timeout: timeout},
 		logger:        logger.With("adapter", "embedding"),
-		limiter:       ratelimit.New(rateLimit, rateBurst, "embedding", logger),
+		upsertSQL: fmt.Sprintf(`
+			INSERT INTO %s (source_id, source_table, content, embedding, event_id, updated_at)
+			VALUES ($1, $2, $3, $4::vector, $5, NOW())
+			ON CONFLICT (source_id) DO UPDATE SET
+			  content = EXCLUDED.content,
+			  embedding = EXCLUDED.embedding,
+			  event_id = EXCLUDED.event_id,
+			  updated_at = NOW()`, safeTable),
+		deleteSQL: fmt.Sprintf(`DELETE FROM %s WHERE source_id = $1`, safeTable),
 	}
-	if cbMaxFailures > 0 {
-		a.cb = circuitbreaker.New(cbMaxFailures, cbResetTimeout, logger)
-	}
-	return a
 }
 
 // Name returns the adapter name.
 func (a *Adapter) Name() string {
 	return "embedding"
 }
-
-// SetAckFunc implements adapter.Acknowledger.
-func (a *Adapter) SetAckFunc(fn adapter.AckFunc) { a.ackFn = fn }
 
 // Validate checks embedding API base URL reachability and pgvector DB connectivity.
 func (a *Adapter) Validate(ctx context.Context) error {
@@ -172,176 +162,121 @@ func (a *Adapter) Validate(ctx context.Context) error {
 	return nil
 }
 
-// Start blocks, consuming events. It reconnects to the pgvector database with
-// backoff on connection loss, and retries embedding API calls per event.
+// Deliver implements adapter.Deliverer. Called by the middleware chain for each event.
+// It manages a persistent pgvector connection, lazily initializing and reconnecting
+// as needed. CB, rate-limit, retry, DLQ, and tracing are handled by the middleware.
+func (a *Adapter) Deliver(ctx context.Context, ev event.Event) error {
+	if err := a.ensureConn(ctx); err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	sourceID, sourceTable, content, isDel, p := a.extractPayload(ev)
+	if sourceID == "" {
+		a.logger.Warn("could not extract source ID, skipping event",
+			"event_id", ev.ID,
+			"id_column", a.idColumn,
+		)
+		return nil
+	}
+
+	if isDel {
+		if _, err := a.conn.Exec(ctx, a.deleteSQL, sourceID); err != nil {
+			if a.conn.IsClosed() {
+				a.conn = nil
+				return fmt.Errorf("delete (connection lost): %w", err)
+			}
+			a.logger.Warn("delete failed, skipping event", "event_id", ev.ID, "error", err)
+			return nil
+		}
+		metrics.EventsDelivered.WithLabelValues("embedding").Inc()
+		a.logger.Debug("vector deleted", "source_id", sourceID)
+		return nil
+	}
+
+	if !a.embeddingColumnsChanged(p) {
+		metrics.EmbeddingSkipped.Inc()
+		a.logger.Debug("skipping unchanged embedding columns", "event_id", ev.ID, "source_id", sourceID)
+		return nil
+	}
+
+	if content == "" {
+		a.logger.Warn("no text content extracted, skipping event",
+			"event_id", ev.ID,
+			"columns", a.columns,
+		)
+		return nil
+	}
+
+	vec, err := a.embed(ctx, ev.ID, content)
+	if err != nil {
+		metrics.EmbeddingAPIErrors.Inc()
+		a.logger.Error("embedding failed", "event_id", ev.ID, "error", err)
+		return err
+	}
+	if vec == nil {
+		// Non-retryable API error; already logged in embed(). Skip event.
+		return nil
+	}
+
+	vecStr := formatVector(vec)
+	if _, err = a.conn.Exec(ctx, a.upsertSQL, sourceID, sourceTable, content, vecStr, ev.ID); err != nil {
+		if a.conn.IsClosed() {
+			a.conn = nil
+			return fmt.Errorf("upsert (connection lost): %w", err)
+		}
+		a.logger.Warn("upsert failed, skipping event", "event_id", ev.ID, "error", err)
+		return nil
+	}
+
+	metrics.EventsDelivered.WithLabelValues("embedding").Inc()
+	a.logger.Debug("vector upserted", "source_id", sourceID, "source_table", sourceTable)
+	return nil
+}
+
+// Start implements adapter.Adapter for backwards compatibility (e.g. direct calls in tests).
+// When the pipeline detects adapter.Deliverer, it uses the middleware path instead and
+// Start is never called.
 func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 	a.logger.Info("embedding adapter started", "table", a.table, "model", a.model, "columns", a.columns)
 
 	return reconnect.Loop(ctx, "embedding", a.backoffBase, a.backoffCap,
 		a.logger, nil,
 		func(ctx context.Context) error {
-			return a.run(ctx, events)
+			if err := a.ensureConn(ctx); err != nil {
+				return err
+			}
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case ev, ok := <-events:
+					if !ok {
+						return nil
+					}
+					if err := a.Deliver(ctx, ev); err != nil {
+						// If connection was lost, return to trigger reconnect.
+						if a.conn == nil {
+							return err
+						}
+						a.logger.Error("delivery failed", "event_id", ev.ID, "error", err)
+					}
+				}
+			}
 		})
 }
 
-func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
+// ensureConn lazily initializes or reconnects the pgvector connection.
+func (a *Adapter) ensureConn(ctx context.Context) error {
+	if a.conn != nil && !a.conn.IsClosed() {
+		return nil
+	}
 	conn, err := pgx.Connect(ctx, a.dbURL)
 	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+		return err
 	}
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = conn.Close(closeCtx)
-	}()
-
-	safeTable := pgx.Identifier{a.table}.Sanitize()
-	upsertSQL := fmt.Sprintf(`
-		INSERT INTO %s (source_id, source_table, content, embedding, event_id, updated_at)
-		VALUES ($1, $2, $3, $4::vector, $5, NOW())
-		ON CONFLICT (source_id) DO UPDATE SET
-		  content = EXCLUDED.content,
-		  embedding = EXCLUDED.embedding,
-		  event_id = EXCLUDED.event_id,
-		  updated_at = NOW()`, safeTable)
-	deleteSQL := fmt.Sprintf(`DELETE FROM %s WHERE source_id = $1`, safeTable)
-
+	a.conn = conn
 	a.logger.Info("connected to pgvector database", "table", a.table)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-
-		case ev, ok := <-events:
-			if !ok {
-				return nil
-			}
-
-			// Circuit breaker check.
-			if a.cb != nil && !a.cb.Allow() {
-				metrics.CircuitBreakerState.WithLabelValues("embedding").Set(1) // open
-				if a.dlq != nil {
-					_ = a.dlq.Record(ctx, ev, "embedding", &pgcdcerr.CircuitBreakerOpenError{Adapter: "embedding"})
-				}
-				if a.ackFn != nil && ev.LSN > 0 {
-					a.ackFn(ev.LSN)
-				}
-				continue
-			}
-
-			// Rate limiter.
-			if err := a.limiter.Wait(ctx); err != nil {
-				return ctx.Err()
-			}
-
-			embedCtx, span := a.startDeliverySpan(ctx, ev)
-			_ = embedCtx // used for API calls below
-
-			sourceID, sourceTable, content, isDel, p := a.extractPayload(ev)
-			if sourceID == "" {
-				a.logger.Warn("could not extract source ID, skipping event",
-					"event_id", ev.ID,
-					"id_column", a.idColumn,
-				)
-				if span != nil {
-					span.End()
-				}
-				continue
-			}
-
-			if isDel {
-				if _, err := conn.Exec(embedCtx, deleteSQL, sourceID); err != nil {
-					if conn.IsClosed() {
-						if span != nil {
-							span.RecordError(err)
-							span.SetStatus(codes.Error, err.Error())
-							span.End()
-						}
-						return fmt.Errorf("delete (connection lost): %w", err)
-					}
-					a.logger.Warn("delete failed, skipping event", "event_id", ev.ID, "error", err)
-				} else {
-					metrics.EventsDelivered.WithLabelValues("embedding").Inc()
-					a.logger.Debug("vector deleted", "source_id", sourceID)
-				}
-				if span != nil {
-					span.End()
-				}
-				continue
-			}
-
-			if !a.embeddingColumnsChanged(p) {
-				metrics.EmbeddingSkipped.Inc()
-				a.logger.Debug("skipping unchanged embedding columns", "event_id", ev.ID, "source_id", sourceID)
-				if a.ackFn != nil && ev.LSN > 0 {
-					a.ackFn(ev.LSN)
-				}
-				if span != nil {
-					span.End()
-				}
-				continue
-			}
-
-			if content == "" {
-				a.logger.Warn("no text content extracted, skipping event",
-					"event_id", ev.ID,
-					"columns", a.columns,
-				)
-				if span != nil {
-					span.End()
-				}
-				continue
-			}
-
-			vec, err := a.embed(embedCtx, ev.ID, content)
-			if err != nil {
-				if a.cb != nil {
-					a.cb.RecordFailure()
-				}
-				metrics.EmbeddingAPIErrors.Inc()
-				if span != nil {
-					span.RecordError(err)
-					span.SetStatus(codes.Error, err.Error())
-					span.End()
-				}
-				a.logger.Error("embedding failed, skipping event", "event_id", ev.ID, "error", err)
-				if a.dlq != nil {
-					if dlqErr := a.dlq.Record(ctx, ev, "embedding", err); dlqErr != nil {
-						a.logger.Error("dlq record failed", "error", dlqErr)
-					}
-				}
-				continue
-			}
-
-			vecStr := formatVector(vec)
-			_, err = conn.Exec(embedCtx, upsertSQL, sourceID, sourceTable, content, vecStr, ev.ID)
-			if err != nil {
-				if conn.IsClosed() {
-					if span != nil {
-						span.RecordError(err)
-						span.SetStatus(codes.Error, err.Error())
-						span.End()
-					}
-					return fmt.Errorf("upsert (connection lost): %w", err)
-				}
-				a.logger.Warn("upsert failed, skipping event", "event_id", ev.ID, "error", err)
-				if span != nil {
-					span.End()
-				}
-				continue
-			}
-
-			if a.cb != nil {
-				a.cb.RecordSuccess()
-			}
-			metrics.EventsDelivered.WithLabelValues("embedding").Inc()
-			a.logger.Debug("vector upserted", "source_id", sourceID, "source_table", sourceTable)
-			if span != nil {
-				span.End()
-			}
-		}
-	}
+	return nil
 }
 
 // embeddingRequest is the OpenAI-compatible request body.
@@ -360,30 +295,8 @@ type embeddingResponse struct {
 	} `json:"usage"`
 }
 
-// startDeliverySpan creates a CONSUMER span linked to the detector span on the event.
-// Returns the enriched context and span (nil when tracing is disabled).
-func (a *Adapter) startDeliverySpan(ctx context.Context, ev event.Event) (context.Context, trace.Span) {
-	if a.tracer == nil {
-		return ctx, nil
-	}
-	var opts []trace.SpanStartOption
-	opts = append(opts,
-		trace.WithSpanKind(trace.SpanKindConsumer),
-		trace.WithAttributes(
-			attribute.String("pgcdc.adapter", "embedding"),
-			attribute.String("pgcdc.event.id", ev.ID),
-			attribute.String("pgcdc.channel", ev.Channel),
-			attribute.String("pgcdc.operation", ev.Operation),
-		),
-	)
-	if ev.SpanContext.IsValid() {
-		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: ev.SpanContext}))
-		ctx = trace.ContextWithRemoteSpanContext(ctx, ev.SpanContext)
-	}
-	return a.tracer.Start(ctx, "pgcdc.adapter.deliver", opts...)
-}
-
 // embed calls the embedding API with per-event retry and returns the vector.
+// Returns (nil, nil) for non-retryable API errors (event should be skipped).
 func (a *Adapter) embed(ctx context.Context, eventID, text string) ([]float64, error) {
 	body, err := json.Marshal(embeddingRequest{Model: a.model, Input: text})
 	if err != nil {
@@ -416,7 +329,7 @@ func (a *Adapter) embed(ctx context.Context, eventID, text string) ([]float64, e
 		if a.apiKey != "" {
 			req.Header.Set("Authorization", "Bearer "+a.apiKey)
 		}
-		// Inject W3C trace context if span is active.
+		// Inject W3C trace context if a span is active in ctx (set by Tracing middleware).
 		tracing.InjectHTTP(ctx, req.Header)
 
 		start := time.Now()
@@ -455,12 +368,12 @@ func (a *Adapter) embed(ctx context.Context, eventID, text string) ([]float64, e
 			continue
 		}
 
-		// Non-retryable 4xx.
+		// Non-retryable 4xx: skip event.
 		a.logger.Error("non-retryable embedding API response, skipping event",
 			"event_id", eventID,
 			"status", resp.StatusCode,
 		)
-		return nil, nil // signal skip
+		return nil, nil
 	}
 
 	return nil, &pgcdcerr.EmbeddingDeliveryError{

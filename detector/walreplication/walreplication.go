@@ -26,7 +26,7 @@ import (
 	"github.com/florinutz/pgcdc/checkpoint"
 	"github.com/florinutz/pgcdc/detector/walreplication/toastcache"
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/snapshot"
@@ -253,32 +253,19 @@ func (d *Detector) SetBackpressureController(ctrl *backpressure.Controller) {
 // streams WAL changes as events. It blocks until ctx is cancelled.
 // The caller owns the events channel; Start does NOT close it.
 func (d *Detector) Start(ctx context.Context, events chan<- event.Event) error {
-	var attempt int
-	for {
-		runErr := d.run(ctx, events)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		disconnErr := &pgcdcerr.DetectorDisconnectedError{
-			Source: source,
-			Err:    runErr,
-		}
-
-		delay := backoff.Jitter(attempt, d.backoffBase, d.backoffCap)
-		d.logger.Error("connection lost, reconnecting",
-			"error", disconnErr,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
+	return reconnect.Loop(ctx, d.Name(), d.backoffBase, d.backoffCap,
+		d.logger, metrics.WalReplicationErrors,
+		func(ctx context.Context) error {
+			err := d.run(ctx, events)
+			if err != nil {
+				return &pgcdcerr.DetectorDisconnectedError{
+					Source: source,
+					Err:    err,
+				}
+			}
+			return nil
+		},
+	)
 }
 
 // run performs a single connect-replicate cycle.

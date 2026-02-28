@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
-	extism "github.com/extism/go-sdk"
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
@@ -26,9 +24,7 @@ type checkpointSaveRequest struct {
 
 // WasmCheckpointStore wraps a Wasm plugin as a checkpoint.Store.
 type WasmCheckpointStore struct {
-	name   string
-	plugin *extism.Plugin
-	logger *slog.Logger
+	basePlugin
 }
 
 // NewCheckpointStore compiles, instantiates, and calls init on a Wasm checkpoint plugin.
@@ -38,49 +34,23 @@ func NewCheckpointStore(ctx context.Context, rt *Runtime, name string, spec *con
 	}
 	logger = logger.With("component", "wasm_checkpoint", "plugin", name)
 
-	hostFns := HostFunctions(logger, name)
-	compiled, err := rt.LoadModule(ctx, spec.Path, hostFns)
+	bp, err := newBase(ctx, rt, name, spec.Path, spec.Config, "", logger)
 	if err != nil {
 		return nil, fmt.Errorf("load checkpoint module %s: %w", name, err)
 	}
 
-	plugin, err := rt.NewInstance(ctx, compiled, spec.Config)
-	if err != nil {
-		return nil, fmt.Errorf("create checkpoint instance %s: %w", name, err)
-	}
-
-	if plugin.FunctionExists("init") {
-		cfgBytes, _ := json.Marshal(spec.Config)
-		_, result, callErr := plugin.Call("init", cfgBytes)
-		if callErr != nil {
-			_ = plugin.Close(ctx)
-			return nil, fmt.Errorf("init checkpoint plugin %s: %w", name, callErr)
-		}
-		if len(result) > 0 {
-			_ = plugin.Close(ctx)
-			return nil, fmt.Errorf("init checkpoint plugin %s: %s", name, string(result))
-		}
+	if err := bp.initPlugin(ctx, "checkpoint", spec.Config); err != nil {
+		return nil, err
 	}
 
 	logger.Info("wasm checkpoint store loaded", "path", spec.Path)
-	return &WasmCheckpointStore{
-		name:   name,
-		plugin: plugin,
-		logger: logger,
-	}, nil
+	return &WasmCheckpointStore{basePlugin: *bp}, nil
 }
 
 func (s *WasmCheckpointStore) Load(ctx context.Context, slotName string) (uint64, error) {
-	start := time.Now()
-	_, result, err := s.plugin.Call("load", []byte(slotName))
-	duration := time.Since(start)
-
-	metrics.PluginCalls.WithLabelValues(s.name, "checkpoint").Inc()
-	metrics.PluginDuration.WithLabelValues(s.name, "checkpoint").Observe(duration.Seconds())
-
+	result, err := s.call("load", "checkpoint", []byte(slotName))
 	if err != nil {
-		metrics.PluginErrors.WithLabelValues(s.name, "checkpoint").Inc()
-		return 0, &pgcdcerr.PluginError{Plugin: s.name, Type: "checkpoint", Err: err}
+		return 0, err
 	}
 
 	if len(result) == 0 {
@@ -98,16 +68,9 @@ func (s *WasmCheckpointStore) Load(ctx context.Context, slotName string) (uint64
 func (s *WasmCheckpointStore) Save(ctx context.Context, slotName string, lsn uint64) error {
 	input, _ := json.Marshal(checkpointSaveRequest{SlotName: slotName, LSN: lsn})
 
-	start := time.Now()
-	_, result, err := s.plugin.Call("save", input)
-	duration := time.Since(start)
-
-	metrics.PluginCalls.WithLabelValues(s.name, "checkpoint").Inc()
-	metrics.PluginDuration.WithLabelValues(s.name, "checkpoint").Observe(duration.Seconds())
-
+	result, err := s.call("save", "checkpoint", input)
 	if err != nil {
-		metrics.PluginErrors.WithLabelValues(s.name, "checkpoint").Inc()
-		return &pgcdcerr.PluginError{Plugin: s.name, Type: "checkpoint", Err: err}
+		return err
 	}
 	if len(result) > 0 {
 		metrics.PluginErrors.WithLabelValues(s.name, "checkpoint").Inc()
@@ -118,10 +81,6 @@ func (s *WasmCheckpointStore) Save(ctx context.Context, slotName string, lsn uin
 }
 
 func (s *WasmCheckpointStore) Close() error {
-	ctx := context.Background()
-	if s.plugin.FunctionExists("close") {
-		_, _, _ = s.plugin.Call("close", nil)
-	}
-	_ = s.plugin.Close(ctx)
+	s.closePlugin(context.Background())
 	return nil
 }
