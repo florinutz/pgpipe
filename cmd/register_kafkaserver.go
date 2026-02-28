@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	kafkaserveradapter "github.com/florinutz/pgcdc/adapter/kafkaserver"
 	"github.com/florinutz/pgcdc/checkpoint"
@@ -43,5 +44,22 @@ func init() {
 				),
 			}, nil
 		},
+		ViperKeys: [][2]string{
+			{"kafkaserver-addr", "kafkaserver.addr"},
+			{"kafkaserver-partitions", "kafkaserver.partition_count"},
+			{"kafkaserver-buffer-size", "kafkaserver.buffer_size"},
+			{"kafkaserver-session-timeout", "kafkaserver.session_timeout"},
+			{"kafkaserver-checkpoint-db", "kafkaserver.checkpoint_db"},
+			{"kafkaserver-key-column", "kafkaserver.key_column"},
+		},
 	})
+
+	// Kafka server adapter flags.
+	f := listenCmd.Flags()
+	f.String("kafkaserver-addr", ":9092", "Kafka protocol server listen address")
+	f.Int("kafkaserver-partitions", 8, "number of partitions per topic")
+	f.Int("kafkaserver-buffer-size", 10000, "ring buffer size per partition")
+	f.Duration("kafkaserver-session-timeout", 30*time.Second, "consumer group session timeout")
+	f.String("kafkaserver-checkpoint-db", "", "PostgreSQL URL for offset storage (default: same as --db)")
+	f.String("kafkaserver-key-column", "id", "JSON field used as partition key")
 }

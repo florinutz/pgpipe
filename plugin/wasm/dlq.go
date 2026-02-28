@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	extism "github.com/extism/go-sdk"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/metrics"
@@ -24,9 +23,7 @@ type dlqRecord struct {
 
 // WasmDLQ wraps a Wasm plugin as a dlq.DLQ.
 type WasmDLQ struct {
-	name   string
-	plugin *extism.Plugin
-	logger *slog.Logger
+	basePlugin
 }
 
 // NewDLQ compiles, instantiates, and calls init on a Wasm DLQ plugin.
@@ -36,36 +33,17 @@ func NewDLQ(ctx context.Context, rt *Runtime, name string, spec *config.PluginSp
 	}
 	logger = logger.With("component", "wasm_dlq", "plugin", name)
 
-	hostFns := HostFunctions(logger, name)
-	compiled, err := rt.LoadModule(ctx, spec.Path, hostFns)
+	bp, err := newBase(ctx, rt, name, spec.Path, spec.Config, "", logger)
 	if err != nil {
 		return nil, fmt.Errorf("load dlq module %s: %w", name, err)
 	}
 
-	plugin, err := rt.NewInstance(ctx, compiled, spec.Config)
-	if err != nil {
-		return nil, fmt.Errorf("create dlq instance %s: %w", name, err)
-	}
-
-	if plugin.FunctionExists("init") {
-		cfgBytes, _ := json.Marshal(spec.Config)
-		_, result, callErr := plugin.Call("init", cfgBytes)
-		if callErr != nil {
-			_ = plugin.Close(ctx)
-			return nil, fmt.Errorf("init dlq plugin %s: %w", name, callErr)
-		}
-		if len(result) > 0 {
-			_ = plugin.Close(ctx)
-			return nil, fmt.Errorf("init dlq plugin %s: %s", name, string(result))
-		}
+	if err := bp.initPlugin(ctx, "dlq", spec.Config); err != nil {
+		return nil, err
 	}
 
 	logger.Info("wasm dlq loaded", "path", spec.Path)
-	return &WasmDLQ{
-		name:   name,
-		plugin: plugin,
-		logger: logger,
-	}, nil
+	return &WasmDLQ{basePlugin: *bp}, nil
 }
 
 func (d *WasmDLQ) Record(ctx context.Context, ev event.Event, adapterName string, err error) error {
@@ -82,17 +60,10 @@ func (d *WasmDLQ) Record(ctx context.Context, ev event.Event, adapterName string
 		return fmt.Errorf("marshal dlq record: %w", marshalErr)
 	}
 
-	start := time.Now()
-	_, result, callErr := d.plugin.Call("record", data)
-	duration := time.Since(start)
-
-	metrics.PluginCalls.WithLabelValues(d.name, "dlq").Inc()
-	metrics.PluginDuration.WithLabelValues(d.name, "dlq").Observe(duration.Seconds())
-
+	result, callErr := d.call("record", "dlq", data)
 	if callErr != nil {
-		metrics.PluginErrors.WithLabelValues(d.name, "dlq").Inc()
 		metrics.DLQErrors.Inc()
-		return &pgcdcerr.PluginError{Plugin: d.name, Type: "dlq", Err: callErr}
+		return callErr
 	}
 	if len(result) > 0 {
 		metrics.PluginErrors.WithLabelValues(d.name, "dlq").Inc()
@@ -105,10 +76,6 @@ func (d *WasmDLQ) Record(ctx context.Context, ev event.Event, adapterName string
 }
 
 func (d *WasmDLQ) Close() error {
-	ctx := context.Background()
-	if d.plugin.FunctionExists("close") {
-		_, _, _ = d.plugin.Call("close", nil)
-	}
-	_ = d.plugin.Close(ctx)
+	d.closePlugin(context.Background())
 	return nil
 }

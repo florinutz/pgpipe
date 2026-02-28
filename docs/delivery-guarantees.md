@@ -130,7 +130,7 @@ Adapters that implement `adapter.Acknowledger` (`SetAckFunc`) call the ack funct
 - **stdout**: acks after successful write
 - **pg_table**: acks after successful insert or intentional skip (constraint violation)
 - **nats**: acks after JetStream publish acknowledgment
-- **embedding**: not explicitly calling ackFn in source (auto-acked on channel send)
+- **embedding**: acked by the middleware Ack layer after successful `Deliver()` call
 - **s3**: acks all events in a batch after successful S3 upload
 - **kafkaserver**: implements Acknowledger interface
 

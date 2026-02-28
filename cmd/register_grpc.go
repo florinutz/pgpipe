@@ -17,5 +17,11 @@ func init() {
 				Adapter: grpcadapter.New(cfg.GRPC.Addr, ctx.Logger),
 			}, nil
 		},
+		ViperKeys: [][2]string{
+			{"grpc-addr", "grpc.addr"},
+		},
 	})
+
+	// gRPC adapter flags.
+	listenCmd.Flags().String("grpc-addr", ":9090", "gRPC server listen address")
 }

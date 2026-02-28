@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 )
 
@@ -93,27 +93,12 @@ func (d *Detector) Name() string {
 // cancelled. On connection failure, it reconnects with exponential backoff.
 // The caller owns the events channel; Start does NOT close it.
 func (d *Detector) Start(ctx context.Context, events chan<- event.Event) error {
-	var attempt int
-	for {
-		err := d.run(ctx, events)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		delay := backoff.Jitter(attempt, d.backoffBase, d.backoffCap)
-		d.logger.Error("outbox connection lost, reconnecting",
-			"error", err,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
+	return reconnect.Loop(ctx, d.Name(), d.backoffBase, d.backoffCap,
+		d.logger, metrics.OutboxErrors,
+		func(ctx context.Context) error {
+			return d.run(ctx, events)
+		},
+	)
 }
 
 // outboxRow represents a row from the outbox table.

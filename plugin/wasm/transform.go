@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
-	extism "github.com/extism/go-sdk"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/metrics"
@@ -17,10 +15,7 @@ import (
 
 // WasmTransform wraps a Wasm plugin as a transform.TransformFunc.
 type WasmTransform struct {
-	name     string
-	plugin   *extism.Plugin
-	encoding string // "json" or "protobuf"
-	logger   *slog.Logger
+	basePlugin
 }
 
 // NewTransform compiles and instantiates a Wasm transform plugin.
@@ -30,29 +25,13 @@ func NewTransform(ctx context.Context, rt *Runtime, spec config.PluginTransformS
 	}
 	logger = logger.With("component", "wasm_transform", "plugin", spec.Name)
 
-	hostFns := HostFunctions(logger, spec.Name)
-	compiled, err := rt.LoadModule(ctx, spec.Path, hostFns)
+	bp, err := newBase(ctx, rt, spec.Name, spec.Path, spec.Config, spec.Encoding, logger)
 	if err != nil {
 		return nil, fmt.Errorf("load transform module %s: %w", spec.Name, err)
 	}
 
-	plugin, err := rt.NewInstance(ctx, compiled, spec.Config)
-	if err != nil {
-		return nil, fmt.Errorf("create transform instance %s: %w", spec.Name, err)
-	}
-
-	encoding := spec.Encoding
-	if encoding == "" {
-		encoding = "json"
-	}
-
-	logger.Info("wasm transform loaded", "path", spec.Path, "encoding", encoding)
-	return &WasmTransform{
-		name:     spec.Name,
-		plugin:   plugin,
-		encoding: encoding,
-		logger:   logger,
-	}, nil
+	logger.Info("wasm transform loaded", "path", spec.Path, "encoding", bp.encoding)
+	return &WasmTransform{basePlugin: *bp}, nil
 }
 
 // TransformFunc returns a transform.TransformFunc closure backed by the Wasm plugin.
@@ -67,20 +46,13 @@ func (wt *WasmTransform) TransformFunc() transform.TransformFunc {
 			return ev, &pgcdcerr.PluginError{Plugin: wt.name, Type: "transform", Err: fmt.Errorf("marshal: %w", err)}
 		}
 
-		start := time.Now()
-		_, result, callErr := wt.plugin.Call("transform", data)
-		duration := time.Since(start)
-
-		metrics.PluginCalls.WithLabelValues(wt.name, "transform").Inc()
-		metrics.PluginDuration.WithLabelValues(wt.name, "transform").Observe(duration.Seconds())
-
+		result, callErr := wt.call("transform", "transform", data)
 		if callErr != nil {
-			metrics.PluginErrors.WithLabelValues(wt.name, "transform").Inc()
 			wt.logger.Warn("transform plugin error, skipping event",
 				slog.String("event_id", ev.ID),
 				slog.String("error", callErr.Error()),
 			)
-			return ev, &pgcdcerr.PluginError{Plugin: wt.name, Type: "transform", Err: callErr}
+			return ev, callErr
 		}
 
 		// Empty result = drop the event.

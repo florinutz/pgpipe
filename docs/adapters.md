@@ -1,6 +1,6 @@
 # Adapters
 
-pgcdc ships with 15 built-in adapters. Use `-a <name>` to enable one or more.
+pgcdc ships with 17 built-in adapters. Use `-a <name>` to enable one or more.
 
 ## stdout
 
@@ -129,6 +129,26 @@ pgcdc listen -c pgcdc:articles -a embedding \
 
 Works with OpenAI, Azure OpenAI, Ollama, vLLM, LiteLLM.
 
+## kafka
+
+Publish events to Kafka topics with per-event keys, headers, and configurable acks. Supports SASL (plain, SCRAM-SHA-256/512), TLS, and exactly-once delivery via `--kafka-transactional-id`.
+
+```bash
+pgcdc listen -c pgcdc:orders -a kafka \
+  --kafka-brokers localhost:9092 --db postgres://...
+```
+
+Terminal Kafka errors go to DLQ; connection errors trigger reconnect with backoff.
+
+## s3
+
+Buffer events and periodically flush partitioned objects (Hive-style `channel=.../year=.../month=.../day=.../`) to any S3-compatible store. Supports JSON Lines (default) or Parquet format.
+
+```bash
+pgcdc listen -c pgcdc:orders -a s3 \
+  --s3-bucket my-bucket --s3-endpoint http://localhost:9000 --db postgres://...
+```
+
 ## iceberg
 
 Write events to Apache Iceberg tables (Parquet files).
@@ -137,3 +157,26 @@ Write events to Apache Iceberg tables (Parquet files).
 pgcdc listen -c pgcdc:orders -a iceberg \
   --iceberg-warehouse /tmp/iceberg --iceberg-table orders --db postgres://...
 ```
+
+## kafkaserver
+
+Start a TCP server that speaks the Kafka wire protocol. Any Kafka consumer library connects directly to pgcdc — no Kafka cluster needed. pgcdc channels become Kafka topics.
+
+```bash
+pgcdc listen -c pgcdc:orders -a kafkaserver \
+  --kafkaserver-addr :9092 --db postgres://...
+```
+
+Supports consumer groups, partition assignment, long-poll Fetch, and offset persistence.
+
+## view
+
+Run streaming SQL analytics over CDC events. SQL-like queries against a virtual `pgcdc_events` table with tumbling, sliding, and session windows.
+
+```bash
+pgcdc listen -c pgcdc:orders -a view \
+  --view-query 'order_counts:SELECT channel, COUNT(*) FROM pgcdc_events TUMBLING WINDOW 1m GROUP BY channel' \
+  --db postgres://...
+```
+
+Results are emitted as `VIEW_RESULT` events on `pgcdc:_view:<name>` channels, re-injected into the bus.

@@ -15,7 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/florinutz/pgcdc/event"
-	"github.com/florinutz/pgcdc/internal/backoff"
+	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
 	"github.com/florinutz/pgcdc/pgcdcerr"
 )
@@ -113,33 +113,19 @@ func (d *Detector) SetTracer(t trace.Tracer) {
 // Start connects to MongoDB and streams change events.
 // It blocks until ctx is cancelled. The caller owns the events channel.
 func (d *Detector) Start(ctx context.Context, events chan<- event.Event) error {
-	var attempt int
-	for {
-		runErr := d.run(ctx, events)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		mongoErr := &pgcdcerr.MongoDBChangeStreamError{
-			URI: d.uri,
-			Err: runErr,
-		}
-
-		delay := backoff.Jitter(attempt, d.backoffBase, d.backoffCap)
-		d.logger.Error("connection lost, reconnecting",
-			"error", mongoErr,
-			"attempt", attempt+1,
-			"delay", delay,
-		)
-		metrics.MongoDBErrors.Inc()
-		attempt++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
+	return reconnect.Loop(ctx, d.Name(), d.backoffBase, d.backoffCap,
+		d.logger, metrics.MongoDBErrors,
+		func(ctx context.Context) error {
+			err := d.run(ctx, events)
+			if err != nil {
+				return &pgcdcerr.MongoDBChangeStreamError{
+					URI: d.uri,
+					Err: err,
+				}
+			}
+			return nil
+		},
+	)
 }
 
 // run performs a single connect → watch → event-loop cycle.

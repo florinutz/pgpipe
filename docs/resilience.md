@@ -110,11 +110,11 @@ The circuit breaker (`internal/circuitbreaker/circuitbreaker.go`) implements the
 Closed (normal) → Open (failures >= max) → Half-Open (after reset timeout) → Closed (success) or Open (failure)
 ```
 
-Configuration is available via CLI flags (`--webhook-cb-failures`, `--webhook-cb-reset`, `--embedding-cb-failures`, `--embedding-cb-reset`), but the circuit breaker is **not yet wired** into adapter delivery loops. It exists as a library ready for integration.
+Configuration is available via CLI flags (`--webhook-cb-failures`, `--webhook-cb-reset`, `--embedding-cb-failures`, `--embedding-cb-reset`). The circuit breaker is wired into the `adapter/middleware` chain for adapters implementing `adapter.Deliverer` (webhook, embedding).
 
 ## Rate Limiter
 
-The rate limiter (`internal/ratelimit/ratelimit.go`) provides token-bucket rate limiting with Prometheus metrics. Configuration via `--webhook-rate-limit`, `--webhook-rate-burst`, `--embedding-rate-limit`, `--embedding-rate-burst`. Like the circuit breaker, it is **not yet wired** into adapter delivery loops.
+The rate limiter (`internal/ratelimit/ratelimit.go`) provides token-bucket rate limiting with Prometheus metrics. Configuration via `--webhook-rate-limit`, `--webhook-rate-burst`, `--embedding-rate-limit`, `--embedding-rate-burst`. Like the circuit breaker, it is wired into the `adapter/middleware` chain for `Deliverer` adapters.
 
 ## Graceful Shutdown
 

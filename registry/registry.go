@@ -13,7 +13,13 @@ import (
 	"sort"
 	"sync"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/florinutz/pgcdc/adapter"
+	"github.com/florinutz/pgcdc/adapter/middleware"
+	"github.com/florinutz/pgcdc/adapter/sse"
+	"github.com/florinutz/pgcdc/adapter/ws"
+	"github.com/florinutz/pgcdc/checkpoint"
 	"github.com/florinutz/pgcdc/detector"
 	"github.com/florinutz/pgcdc/encoding"
 	"github.com/florinutz/pgcdc/internal/config"
@@ -32,10 +38,10 @@ type AdapterContext struct {
 
 // AdapterResult is returned by adapter factories.
 type AdapterResult struct {
-	Adapter adapter.Adapter
-	// Extra holds arbitrary per-adapter data (e.g. SSE/WS brokers that need
-	// to be wired into the HTTP server). Callers inspect these with type assertions.
-	Extra map[string]any
+	Adapter          adapter.Adapter
+	MiddlewareConfig *middleware.Config // non-nil when the adapter needs CB/RL middleware
+	SSEBroker        *sse.Broker        // non-nil for the SSE adapter
+	WSBroker         *ws.Broker         // non-nil for the WS adapter
 }
 
 // AdapterEntry describes a registered adapter.
@@ -44,20 +50,30 @@ type AdapterEntry struct {
 	Description string
 	Create      func(ctx AdapterContext) (AdapterResult, error)
 	BindFlags   func(f *pflag.FlagSet)
+	ViperKeys   [][2]string // flag-name → viper-key pairs for PreRunE binding
 }
 
 // DetectorContext carries shared resources for detector factories.
 type DetectorContext struct {
-	Cfg    config.Config
-	Logger *slog.Logger
-	Ctx    context.Context
+	Cfg            config.Config
+	Logger         *slog.Logger
+	Ctx            context.Context
+	TracerProvider trace.TracerProvider // non-nil when OTel tracing is configured
+	WasmRT         any                  // opaque wasm runtime; non-nil when plugins are configured
+}
+
+// DetectorResult is returned by detector factories.
+type DetectorResult struct {
+	Detector        detector.Detector
+	CheckpointStore checkpoint.Store // non-nil for WAL detector with persistent slot
+	Cleanup         func()           // deferred cleanup (e.g. progress store close); may be nil
 }
 
 // DetectorEntry describes a registered detector.
 type DetectorEntry struct {
 	Name        string
 	Description string
-	Create      func(ctx DetectorContext) (detector.Detector, error)
+	Create      func(ctx DetectorContext) (DetectorResult, error)
 	BindFlags   func(f *pflag.FlagSet)
 }
 
@@ -125,6 +141,15 @@ func CreateAdapter(name string, ctx AdapterContext) (AdapterResult, error) {
 	e, ok := GetAdapter(name)
 	if !ok {
 		return AdapterResult{}, fmt.Errorf("unknown adapter %q", name)
+	}
+	return e.Create(ctx)
+}
+
+// CreateDetector creates a detector by name using the registry.
+func CreateDetector(name string, ctx DetectorContext) (DetectorResult, error) {
+	e, ok := GetDetector(name)
+	if !ok {
+		return DetectorResult{}, fmt.Errorf("unknown detector %q", name)
 	}
 	return e.Create(ctx)
 }
@@ -205,6 +230,21 @@ func BindDetectorFlags(f *pflag.FlagSet) {
 			e.BindFlags(f)
 		}
 	}
+}
+
+// BindAdapterViperKeys iterates registered adapters and calls bindFn for each adapter's ViperKeys.
+// Designed to be called from bindListenFlags (PreRunE).
+func BindAdapterViperKeys(f *pflag.FlagSet, bindFn func(*pflag.FlagSet, [][2]string) error) error {
+	mu.RLock()
+	defer mu.RUnlock()
+	for _, e := range adapters {
+		if len(e.ViperKeys) > 0 {
+			if err := bindFn(f, e.ViperKeys); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // SpecToTransform converts a config TransformSpec using registered transform factories.
