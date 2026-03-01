@@ -51,7 +51,7 @@ func (sw *SessionWindow) aggCount() int {
 }
 
 // Add processes one event, finding or creating a session for its group key.
-func (sw *SessionWindow) Add(meta EventMeta, payload map[string]any) {
+func (sw *SessionWindow) Add(meta EventMeta, payload map[string]any, eventTime time.Time) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
@@ -114,6 +114,11 @@ func (sw *SessionWindow) Add(meta EventMeta, payload map[string]any) {
 	}
 
 	metrics.ViewEventsProcessed.WithLabelValues(sw.def.Name).Inc()
+}
+
+// FlushUpTo delegates to Flush for session windows.
+func (sw *SessionWindow) FlushUpTo(wm time.Time) []event.Event {
+	return sw.Flush()
 }
 
 // Flush checks all sessions, emits results for expired sessions

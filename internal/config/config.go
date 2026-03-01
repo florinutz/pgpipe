@@ -10,6 +10,8 @@ type Config struct {
 	LogFormat           string                      `mapstructure:"log_format"`
 	ShutdownTimeout     time.Duration               `mapstructure:"shutdown_timeout"`
 	MetricsAddr         string                      `mapstructure:"metrics_addr"`
+	MetricsTLSCertFile  string                      `mapstructure:"metrics_tls_cert_file"`
+	MetricsTLSKeyFile   string                      `mapstructure:"metrics_tls_key_file"`
 	SkipValidation      bool                        `mapstructure:"skip_validation"`
 	SkipMigrations      bool                        `mapstructure:"skip_migrations"`
 	Bus                 BusConfig                   `mapstructure:"bus"`

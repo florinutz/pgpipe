@@ -15,8 +15,8 @@ func TestSessionWindow_GapExpiry(t *testing.T) {
 	sw := NewSessionWindow(def, nil)
 
 	// Add events.
-	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 1})
-	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 2})
+	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 1}, time.Time{})
+	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 2}, time.Time{})
 
 	// Flush immediately: session should still be active (within gap).
 	events := sw.Flush()
@@ -51,13 +51,13 @@ func TestSessionWindow_ActiveSession(t *testing.T) {
 	sw := NewSessionWindow(def, nil)
 
 	// Add event.
-	sw.Add(EventMeta{}, map[string]any{"id": 1})
+	sw.Add(EventMeta{}, map[string]any{"id": 1}, time.Time{})
 
 	// Wait less than gap.
 	time.Sleep(30 * time.Millisecond)
 
 	// Add another event (keeps session alive).
-	sw.Add(EventMeta{}, map[string]any{"id": 2})
+	sw.Add(EventMeta{}, map[string]any{"id": 2}, time.Time{})
 
 	// Wait less than gap.
 	time.Sleep(30 * time.Millisecond)
@@ -93,9 +93,9 @@ func TestSessionWindow_MultipleGroups(t *testing.T) {
 
 	sw := NewSessionWindow(def, nil)
 
-	sw.Add(EventMeta{}, map[string]any{"region": "us-east"})
-	sw.Add(EventMeta{}, map[string]any{"region": "us-east"})
-	sw.Add(EventMeta{}, map[string]any{"region": "eu-west"})
+	sw.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
+	sw.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
+	sw.Add(EventMeta{}, map[string]any{"region": "eu-west"}, time.Time{})
 
 	// Wait for gap to expire.
 	time.Sleep(60 * time.Millisecond)
@@ -128,7 +128,7 @@ func TestSessionWindow_WindowInfo(t *testing.T) {
 	}
 
 	sw := NewSessionWindow(def, nil)
-	sw.Add(EventMeta{}, map[string]any{})
+	sw.Add(EventMeta{}, map[string]any{}, time.Time{})
 
 	time.Sleep(60 * time.Millisecond)
 

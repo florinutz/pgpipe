@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,6 +204,12 @@ func init() {
 
 	// CEL filter CLI shortcut.
 	f.String("filter-cel", "", "global CEL filter expression (e.g. 'operation == \"INSERT\"')")
+
+	// TLS flags.
+	f.String("sse-tls-cert", "", "path to TLS certificate file for HTTP server")
+	f.String("sse-tls-key", "", "path to TLS private key file for HTTP server")
+	f.String("metrics-tls-cert", "", "path to TLS certificate file for metrics server")
+	f.String("metrics-tls-key", "", "path to TLS private key file for metrics server")
 }
 
 // bindListenFlags binds all listen command flags to viper keys. Called in PreRunE
@@ -320,6 +327,12 @@ func bindListenFlags(cmd *cobra.Command, _ []string) error {
 
 		// Multi-detector.
 		{"detector-mode", "detector_mode"},
+
+		// TLS.
+		{"sse-tls-cert", "sse.tls_cert_file"},
+		{"sse-tls-key", "sse.tls_key_file"},
+		{"metrics-tls-cert", "metrics_tls_cert_file"},
+		{"metrics-tls-key", "metrics_tls_key_file"},
 	}); err != nil {
 		return err
 	}
@@ -985,6 +998,17 @@ func startHTTPServers(g *errgroup.Group, gCtx context.Context, cfg config.Config
 			if err != nil {
 				return fmt.Errorf("http listen: %w", err)
 			}
+			if cfg.SSE.TLSCertFile != "" && cfg.SSE.TLSKeyFile != "" {
+				cert, err := tls.LoadX509KeyPair(cfg.SSE.TLSCertFile, cfg.SSE.TLSKeyFile)
+				if err != nil {
+					return fmt.Errorf("load TLS cert: %w", err)
+				}
+				ln = tls.NewListener(ln, &tls.Config{
+					Certificates: []tls.Certificate{cert},
+					MinVersion:   tls.VersionTLS12,
+				})
+				logger.Info("http server TLS enabled", "addr", cfg.SSE.Addr)
+			}
 			if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 				return fmt.Errorf("http serve: %w", err)
 			}
@@ -1009,6 +1033,17 @@ func startHTTPServers(g *errgroup.Group, gCtx context.Context, cfg config.Config
 			ln, err := net.Listen("tcp", cfg.MetricsAddr)
 			if err != nil {
 				return fmt.Errorf("metrics listen: %w", err)
+			}
+			if cfg.MetricsTLSCertFile != "" && cfg.MetricsTLSKeyFile != "" {
+				cert, err := tls.LoadX509KeyPair(cfg.MetricsTLSCertFile, cfg.MetricsTLSKeyFile)
+				if err != nil {
+					return fmt.Errorf("load metrics TLS cert: %w", err)
+				}
+				ln = tls.NewListener(ln, &tls.Config{
+					Certificates: []tls.Certificate{cert},
+					MinVersion:   tls.VersionTLS12,
+				})
+				logger.Info("metrics server TLS enabled", "addr", cfg.MetricsAddr)
 			}
 			if err := metricsServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 				return fmt.Errorf("metrics serve: %w", err)

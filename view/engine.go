@@ -14,8 +14,9 @@ import (
 
 // Window is the common interface for all window types.
 type Window interface {
-	Add(meta EventMeta, payload map[string]any)
+	Add(meta EventMeta, payload map[string]any, eventTime time.Time)
 	Flush() []event.Event
+	FlushUpTo(wm time.Time) []event.Event
 }
 
 // Engine orchestrates multiple views, each with its own window.
@@ -27,6 +28,12 @@ type Engine struct {
 type viewInstance struct {
 	def    *ViewDef
 	window Window
+	// For event-time watermarks:
+	watermarkMu   sync.Mutex
+	highWatermark time.Time
+	// For interval joins:
+	join        *IntervalJoinWindow // non-nil when def.Join != nil
+	joinResults chan event.Event    // buffered channel for join matches
 }
 
 // NewEngine creates an engine from a set of view definitions.
@@ -37,10 +44,14 @@ func NewEngine(defs []*ViewDef, logger *slog.Logger) *Engine {
 
 	views := make([]*viewInstance, len(defs))
 	for i, def := range defs {
-		views[i] = &viewInstance{
-			def:    def,
-			window: newWindow(def, logger),
+		vi := &viewInstance{def: def}
+		if def.Join != nil {
+			vi.join = NewIntervalJoinWindow(def.Join)
+			vi.joinResults = make(chan event.Event, 1000)
+		} else {
+			vi.window = newWindow(def, logger)
 		}
+		views[i] = vi
 	}
 
 	return &Engine{
@@ -92,11 +103,51 @@ func (e *Engine) Process(ev event.Event) {
 	}
 
 	for _, vi := range e.views {
+		// Handle interval join routing.
+		if vi.def.Join != nil {
+			jd := vi.def.Join
+			switch ev.Channel {
+			case jd.LeftChan:
+				matches := vi.join.AddLeft(time.Now(), payload)
+				for _, m := range matches {
+					select {
+					case vi.joinResults <- m:
+					default:
+					}
+				}
+			case jd.RightChan:
+				matches := vi.join.AddRight(time.Now(), payload)
+				for _, m := range matches {
+					select {
+					case vi.joinResults <- m:
+					default:
+					}
+				}
+			}
+			continue
+		}
+
 		// Evaluate WHERE predicate.
 		if vi.def.Where != nil && !vi.def.Where(meta, payload) {
 			continue
 		}
-		vi.window.Add(meta, payload)
+
+		if vi.def.EventTimeField != "" {
+			// Event-time mode: extract timestamp and advance watermark.
+			et := extractEventTime(payload, vi.def.EventTimeField)
+			vi.window.Add(meta, payload, et)
+			if !et.IsZero() {
+				vi.watermarkMu.Lock()
+				wm := et.Add(-vi.def.AllowedLateness)
+				if wm.After(vi.highWatermark) {
+					vi.highWatermark = wm
+				}
+				vi.watermarkMu.Unlock()
+			}
+		} else {
+			// Processing-time mode.
+			vi.window.Add(meta, payload, time.Time{})
+		}
 	}
 }
 
@@ -131,6 +182,23 @@ func tickInterval(def *ViewDef) time.Duration {
 
 // runView runs a single view's ticker loop.
 func (e *Engine) runView(ctx context.Context, vi *viewInstance, emit chan<- event.Event) {
+	// Join views: drain joinResults channel, no ticker needed for flush.
+	if vi.def.Join != nil {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-vi.joinResults:
+				select {
+				case emit <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
+
+	// Standard window views.
 	ticker := time.NewTicker(tickInterval(vi.def))
 	defer ticker.Stop()
 
@@ -150,7 +218,18 @@ func (e *Engine) runView(ctx context.Context, vi *viewInstance, emit chan<- even
 
 		case <-ticker.C:
 			start := time.Now()
-			events := vi.window.Flush()
+			var events []event.Event
+			if vi.def.EventTimeField != "" {
+				// Event-time mode: flush based on watermark.
+				vi.watermarkMu.Lock()
+				wm := vi.highWatermark
+				vi.watermarkMu.Unlock()
+				if !wm.IsZero() {
+					events = vi.window.FlushUpTo(wm)
+				}
+			} else {
+				events = vi.window.Flush()
+			}
 			metrics.ViewWindowDuration.WithLabelValues(vi.def.Name).Observe(time.Since(start).Seconds())
 
 			for _, ev := range events {
@@ -169,7 +248,43 @@ func (e *Engine) runView(ctx context.Context, vi *viewInstance, emit chan<- even
 func (e *Engine) FlushAll() []event.Event {
 	all := make([]event.Event, 0, len(e.views))
 	for _, vi := range e.views {
-		all = append(all, vi.window.Flush()...)
+		if vi.window != nil {
+			all = append(all, vi.window.Flush()...)
+		}
 	}
 	return all
+}
+
+// extractEventTime extracts a time.Time from a payload using a dotted field path.
+// Returns zero time if field not found or not a valid RFC3339 timestamp.
+func extractEventTime(payload map[string]any, field string) time.Time {
+	if payload == nil || field == "" {
+		return time.Time{}
+	}
+	parts := strings.Split(field, ".")
+	// Strip the leading "payload" component to match resolveFieldParsed semantics:
+	// the engine's payload map IS the top-level JSON object, so "payload.row.ts"
+	// should navigate ["row","ts"], not ["payload","row","ts"].
+	if len(parts) > 1 && parts[0] == "payload" {
+		parts = parts[1:]
+	}
+	var val any = payload
+	for _, part := range parts {
+		m, ok := val.(map[string]any)
+		if !ok {
+			return time.Time{}
+		}
+		val = m[part]
+	}
+	s, ok := val.(string)
+	if !ok {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
 }

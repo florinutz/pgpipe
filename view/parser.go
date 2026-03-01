@@ -13,10 +13,13 @@ import (
 )
 
 var (
-	tumblingRe = regexp.MustCompile(`(?i)\s+TUMBLING\s+WINDOW\s+(\S+)\s*$`)
-	slidingRe  = regexp.MustCompile(`(?i)\s+SLIDING\s+WINDOW\s+(\S+)\s+SLIDE\s+(\S+)\s*$`)
-	sessionRe  = regexp.MustCompile(`(?i)\s+SESSION\s+WINDOW\s+(\S+)\s*$`)
-	latenessRe = regexp.MustCompile(`(?i)\s+ALLOWED\s+LATENESS\s+(\S+)`)
+	tumblingRe  = regexp.MustCompile(`(?i)\s+TUMBLING\s+WINDOW\s+(\S+)\s*$`)
+	slidingRe   = regexp.MustCompile(`(?i)\s+SLIDING\s+WINDOW\s+(\S+)\s+SLIDE\s+(\S+)\s*$`)
+	sessionRe   = regexp.MustCompile(`(?i)\s+SESSION\s+WINDOW\s+(\S+)\s*$`)
+	latenessRe  = regexp.MustCompile(`(?i)\s+ALLOWED\s+LATENESS\s+(\S+)`)
+	eventTimeRe = regexp.MustCompile(`(?i)\s+EVENT\s+TIME\s+BY\s+(\S+)`)
+	withinRe    = regexp.MustCompile(`(?i)\s+WITHIN\s+(\S+)`)
+	joinQueryRe = regexp.MustCompile(`(?i)\bJOIN\s+pgcdc_events\b`)
 )
 
 // Parse parses a streaming SQL view query into a ViewDef.
@@ -29,6 +32,11 @@ var (
 func Parse(name, query string, emit EmitMode, maxGroups int) (*ViewDef, error) {
 	if maxGroups <= 0 {
 		maxGroups = 100000
+	}
+
+	// Detect interval join queries (contain JOIN pgcdc_events).
+	if joinQueryRe.MatchString(query) {
+		return parseJoinQuery(name, query, emit, maxGroups)
 	}
 
 	// 1. Extract ALLOWED LATENESS clause (before window clause).
@@ -44,6 +52,13 @@ func Parse(name, query string, emit EmitMode, maxGroups int) (*ViewDef, error) {
 		}
 		allowedLateness = dur
 		remaining = latenessRe.ReplaceAllString(remaining, "")
+	}
+
+	// Extract EVENT TIME BY clause (before window clause).
+	var eventTimeField string
+	if m := eventTimeRe.FindStringSubmatch(remaining); m != nil {
+		eventTimeField = m[1]
+		remaining = eventTimeRe.ReplaceAllString(remaining, "")
 	}
 
 	// 2. Extract window clause (not standard SQL).
@@ -77,6 +92,7 @@ func Parse(name, query string, emit EmitMode, maxGroups int) (*ViewDef, error) {
 		SlideSize:       slideSize,
 		SessionGap:      sessionGap,
 		AllowedLateness: allowedLateness,
+		EventTimeField:  eventTimeField,
 	}
 
 	// 3. Validate FROM.
@@ -679,6 +695,108 @@ func parseDottedPath(field string) []string {
 		return nil
 	}
 	return strings.Split(field, ".")
+}
+
+// parseJoinQuery parses an interval join query into a ViewDef with a non-nil Join field.
+// Expected format:
+//
+//	SELECT a.field, b.field
+//	FROM pgcdc_events a
+//	JOIN pgcdc_events b ON a.left_key = b.right_key
+//	WITHIN <duration>
+//	WHERE a.channel = 'left_chan' AND b.channel = 'right_chan'
+func parseJoinQuery(name, query string, emit EmitMode, maxGroups int) (*ViewDef, error) {
+	// Extract WITHIN clause.
+	withinMatch := withinRe.FindStringSubmatch(query)
+	if withinMatch == nil {
+		return nil, fmt.Errorf("interval join requires WITHIN clause")
+	}
+	within, err := time.ParseDuration(withinMatch[1])
+	if err != nil {
+		return nil, fmt.Errorf("invalid WITHIN duration %q: %w", withinMatch[1], err)
+	}
+	if within <= 0 {
+		return nil, fmt.Errorf("WITHIN duration must be positive")
+	}
+
+	// Extract table aliases from FROM and JOIN clauses.
+	fromRe := regexp.MustCompile(`(?i)\bFROM\s+pgcdc_events\s+(\w+)`)
+	joinRe := regexp.MustCompile(`(?i)\bJOIN\s+pgcdc_events\s+(\w+)`)
+
+	fromMatch := fromRe.FindStringSubmatch(query)
+	if fromMatch == nil {
+		return nil, fmt.Errorf("interval join: missing FROM pgcdc_events <alias>")
+	}
+	leftAlias := fromMatch[1]
+
+	joinMatch := joinRe.FindStringSubmatch(query)
+	if joinMatch == nil {
+		return nil, fmt.Errorf("interval join: missing JOIN pgcdc_events <alias>")
+	}
+	rightAlias := joinMatch[1]
+
+	// Extract ON condition: left_alias.field = right_alias.field
+	onRe := regexp.MustCompile(`(?i)\bON\s+` + regexp.QuoteMeta(leftAlias) + `\.(\S+)\s*=\s*` + regexp.QuoteMeta(rightAlias) + `\.(\S+)`)
+	onMatch := onRe.FindStringSubmatch(query)
+	if onMatch == nil {
+		return nil, fmt.Errorf("interval join: missing ON %s.<field> = %s.<field>", leftAlias, rightAlias)
+	}
+	leftKey := onMatch[1]
+	rightKey := onMatch[2]
+
+	// Extract channel constraints from WHERE.
+	leftChanRe := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(leftAlias) + `\.channel\s*=\s*'([^']+)'`)
+	rightChanRe := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(rightAlias) + `\.channel\s*=\s*'([^']+)'`)
+
+	leftChanMatch := leftChanRe.FindStringSubmatch(query)
+	rightChanMatch := rightChanRe.FindStringSubmatch(query)
+
+	leftChan := ""
+	if leftChanMatch != nil {
+		leftChan = leftChanMatch[1]
+	}
+	rightChan := ""
+	if rightChanMatch != nil {
+		rightChan = rightChanMatch[1]
+	}
+
+	// Extract SELECT items (simple: alias.field AS key or alias.field, key).
+	selectRe := regexp.MustCompile(`(?i)\b(` + regexp.QuoteMeta(leftAlias) + `|` + regexp.QuoteMeta(rightAlias) + `)\.(\S+?)(?:\s+AS\s+(\w+))?(?:\s*,|\s+FROM\b)`)
+	var selectItems []JoinSelectItem
+	for _, m := range selectRe.FindAllStringSubmatch(query, -1) {
+		alias := m[1]
+		field := m[2]
+		outputKey := m[3]
+		if outputKey == "" {
+			parts := strings.Split(field, ".")
+			outputKey = alias + "_" + parts[len(parts)-1]
+		}
+		selectItems = append(selectItems, JoinSelectItem{
+			SideAlias: alias,
+			Field:     field,
+			OutputKey: outputKey,
+		})
+	}
+
+	jd := &JoinDef{
+		Name:        name,
+		LeftAlias:   leftAlias,
+		RightAlias:  rightAlias,
+		LeftKey:     leftKey,
+		RightKey:    rightKey,
+		Within:      within,
+		LeftChan:    leftChan,
+		RightChan:   rightChan,
+		SelectItems: selectItems,
+	}
+
+	return &ViewDef{
+		Name:      name,
+		Query:     query,
+		Emit:      emit,
+		MaxGroups: maxGroups,
+		Join:      jd,
+	}, nil
 }
 
 // likeToRegex converts a SQL LIKE pattern to a compiled regexp.

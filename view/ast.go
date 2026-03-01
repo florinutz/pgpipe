@@ -69,6 +69,32 @@ type ViewDef struct {
 	SlideSize       time.Duration // for sliding windows
 	SessionGap      time.Duration // for session windows
 	AllowedLateness time.Duration // for late event handling
+
+	// EventTimeField is the dotted payload path for event-time watermarks.
+	// Empty string = processing-time mode (wall clock).
+	EventTimeField string
+	// Join is non-nil for interval join queries (no window clause).
+	Join *JoinDef
+}
+
+// JoinSelectItem references a field from left or right stream in an interval join SELECT.
+type JoinSelectItem struct {
+	SideAlias string // "a" or "b" (matches LeftAlias/RightAlias)
+	Field     string // dotted field path within that side's payload
+	OutputKey string // key name in emitted payload
+}
+
+// JoinDef defines an interval join between two event streams.
+type JoinDef struct {
+	Name        string           // view name (for channel emission)
+	LeftAlias   string           // e.g. "a"
+	RightAlias  string           // e.g. "b"
+	LeftKey     string           // join key field path in left events
+	RightKey    string           // join key field path in right events
+	Within      time.Duration    // max time difference between matched events
+	LeftChan    string           // channel constraint for left stream (from WHERE)
+	RightChan   string           // channel constraint for right stream (from WHERE)
+	SelectItems []JoinSelectItem // if empty: include full payloads
 }
 
 // Predicate is a compiled filter function over an event's metadata and payload.

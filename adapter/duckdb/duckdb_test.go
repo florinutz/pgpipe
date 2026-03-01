@@ -15,6 +15,16 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// waitReady blocks until the adapter's DB is initialised or the test times out.
+func waitReady(t *testing.T, a *Adapter) {
+	t.Helper()
+	select {
+	case <-a.ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("duckdb adapter not ready within 5s")
+	}
+}
+
 func TestAdapter_IngestAndQuery(t *testing.T) {
 	a := New(":memory:", 1*time.Hour, 1*time.Second, 100, nil)
 
@@ -29,7 +39,7 @@ func TestAdapter_IngestAndQuery(t *testing.T) {
 	}()
 
 	// Wait for DB to initialize.
-	time.Sleep(100 * time.Millisecond)
+	waitReady(t, a)
 
 	// Send events.
 	for i := 0; i < 3; i++ {
@@ -95,7 +105,8 @@ func TestAdapter_TablesHandler(t *testing.T) {
 		errCh <- a.Start(ctx, events)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for DB to initialize.
+	waitReady(t, a)
 
 	// Send events to different channels.
 	for _, ch := range []string{"users", "users", "orders"} {
@@ -142,7 +153,8 @@ func TestAdapter_TTLCleanup(t *testing.T) {
 		errCh <- a.Start(ctx, events)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for DB to initialize.
+	waitReady(t, a)
 
 	ev, err := event.New("users", "INSERT", json.RawMessage(`{}`), "test")
 	if err != nil {
@@ -154,9 +166,9 @@ func TestAdapter_TTLCleanup(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Wait for retention to expire + cleanup cycle to run.
-	// Cleanup ticker fires at retention/10 = 30ms, so after 800ms the event
-	// (300ms retention) should be well expired and cleaned up.
-	time.Sleep(800 * time.Millisecond)
+	// Cleanup ticker is clamped to min 1s, so we need to wait past 1s.
+	// Event (300ms retention) will be expired well before the cleanup fires.
+	time.Sleep(1300 * time.Millisecond)
 
 	r := chi.NewRouter()
 	a.MountHTTP(r)
@@ -200,7 +212,8 @@ func TestAdapter_QueryHandler_InvalidSQL(t *testing.T) {
 		errCh <- a.Start(ctx, events)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for DB to initialize.
+	waitReady(t, a)
 
 	r := chi.NewRouter()
 	a.MountHTTP(r)
@@ -231,7 +244,8 @@ func TestAdapter_QueryHandler_EmptySQL(t *testing.T) {
 		errCh <- a.Start(ctx, events)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for DB to initialize.
+	waitReady(t, a)
 
 	r := chi.NewRouter()
 	a.MountHTTP(r)
@@ -262,7 +276,8 @@ func TestAdapter_QueryHandler_WithParams(t *testing.T) {
 		errCh <- a.Start(ctx, events)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for DB to initialize.
+	waitReady(t, a)
 
 	ev, err := event.New("users", "INSERT", json.RawMessage(`{"id":1}`), "test")
 	if err != nil {

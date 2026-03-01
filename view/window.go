@@ -84,7 +84,7 @@ func (tw *TumblingWindow) aggCount() int {
 }
 
 // Add processes one event, updating the appropriate group's aggregators.
-func (tw *TumblingWindow) Add(meta EventMeta, payload map[string]any) {
+func (tw *TumblingWindow) Add(meta EventMeta, payload map[string]any, eventTime time.Time) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
 
@@ -211,6 +211,18 @@ func (tw *TumblingWindow) Flush() []event.Event {
 	}
 
 	return events
+}
+
+// FlushUpTo emits windows whose end time is at or before the watermark.
+func (tw *TumblingWindow) FlushUpTo(wm time.Time) []event.Event {
+	tw.mu.Lock()
+	windowEnd := tw.windowStart.Add(tw.def.WindowSize)
+	tw.mu.Unlock()
+
+	if !wm.IsZero() && wm.After(windowEnd) {
+		return tw.Flush()
+	}
+	return nil
 }
 
 // expireClosedWindows removes closed windows past the allowed lateness. Must be called with mu held.

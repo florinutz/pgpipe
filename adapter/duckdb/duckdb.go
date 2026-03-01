@@ -29,7 +29,8 @@ type Adapter struct {
 	flushSize     int
 	logger        *slog.Logger
 
-	db atomic.Pointer[sql.DB]
+	db    atomic.Pointer[sql.DB]
+	ready chan struct{} // closed by Start after the DB is initialised
 
 	mu     sync.Mutex
 	buffer []event.Event
@@ -58,6 +59,7 @@ func New(path string, retention, flushInterval time.Duration, flushSize int, log
 		flushInterval: flushInterval,
 		flushSize:     flushSize,
 		logger:        logger.With("adapter", "duckdb"),
+		ready:         make(chan struct{}),
 	}
 }
 
@@ -84,6 +86,7 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 		a.db.Store(nil)
 		return fmt.Errorf("create table: %w", err)
 	}
+	close(a.ready)
 
 	flushTicker := time.NewTicker(a.flushInterval)
 	defer flushTicker.Stop()
