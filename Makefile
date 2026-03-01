@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/florinutz/pgcdc/cmd.Version=$(VERSION)
 
-.PHONY: build build-slim build-slim-stripped size test test-scenarios test-all lint vet fmt bench bench-unit bench-compare bench-save bench-debezium fuzz coverage docker-build docker-up docker-down clean help
+.PHONY: build build-slim build-slim-stripped size test test-scenarios test-all lint vet fmt bench bench-unit bench-compare bench-save bench-debezium fuzz coverage coverage-gate test-smoke docker-build docker-up docker-down clean help
 
 SLIM_TAGS := no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins,no_views
 
@@ -28,7 +28,7 @@ test:
 
 ## test-scenarios: Run scenario tests (requires Docker)
 test-scenarios:
-	go test -race -count=1 -timeout=600s -tags=integration ./scenarios/...
+	go test -race -count=1 -timeout=600s -tags=integration -parallel 8 ./scenarios/...
 
 ## test-all: Run unit + scenario tests
 test-all: test test-scenarios
@@ -82,11 +82,35 @@ bench-debezium:
 fuzz:
 	go test -fuzz=Fuzz -fuzztime=30s ./adapter/kafkaserver/
 	go test -fuzz=Fuzz -fuzztime=30s ./transform/
+	go test -fuzz=FuzzParse -fuzztime=30s ./view/
+	go test -fuzz=FuzzCompile -fuzztime=30s ./cel/
 
 ## coverage: Generate test coverage report
 coverage:
 	go test -coverprofile=coverage.out $$(go list ./... | grep -v /scenarios)
 	go tool cover -func=coverage.out
+
+## coverage-gate: Fail if coverage of pure-logic packages drops below 75%
+coverage-gate:
+	go test -coverprofile=coverage-gate.out -race -count=1 \
+		./transform/... ./view/... ./cel/... ./bus/... ./ack/... \
+		./backpressure/... ./encoding/... \
+		./internal/circuitbreaker/... ./internal/ratelimit/...
+	@go tool cover -func=coverage-gate.out | awk '/total:/ { \
+		gsub(/%/, "", $$3); \
+		if ($$3+0 < 75) { \
+			printf "Coverage %.1f%% is below 75%% threshold\n", $$3+0; \
+			exit 1 \
+		} else { \
+			printf "Coverage gate passed: %.1f%%\n", $$3+0 \
+		} \
+	}'
+
+## test-smoke: Quick smoke test (<15s, unit tests only)
+test-smoke:
+	go test -race -count=1 -timeout=15s \
+		./transform/... ./event/... ./bus/... ./ack/... ./backpressure/... \
+		./cel/... ./internal/circuitbreaker/... ./internal/ratelimit/...
 
 ## clean: Remove build artifacts
 clean:

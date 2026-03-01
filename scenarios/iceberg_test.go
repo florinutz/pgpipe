@@ -15,6 +15,7 @@ import (
 )
 
 func TestScenario_Iceberg(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 	channel := createTrigger(t, connStr, "iceberg_events")
 

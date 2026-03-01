@@ -21,6 +21,7 @@ import (
 )
 
 func TestScenario_DLQCommands(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path: list, replay, purge", func(t *testing.T) {

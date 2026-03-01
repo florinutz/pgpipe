@@ -24,6 +24,7 @@ import (
 // constrains WAL checkpoint advancement to the minimum acked LSN across all
 // adapters.
 func TestScenario_CooperativeCheckpoint(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path", func(t *testing.T) {

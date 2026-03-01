@@ -17,6 +17,7 @@ import (
 )
 
 func TestScenario_Embedding(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path: insert update delete lifecycle", func(t *testing.T) {

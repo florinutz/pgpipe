@@ -1,0 +1,15 @@
+{
+  "id": "019576a0-0000-7000-8000-000000000003",
+  "channel": "pgcdc:orders",
+  "operation": "DELETE",
+  "payload": {
+    "op": "DELETE",
+    "table": "orders",
+    "row": {
+      "id": 1
+    },
+    "old": null
+  },
+  "source": "wal_replication",
+  "created_at": "2025-06-15T12:00:00Z"
+}

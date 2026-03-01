@@ -12,6 +12,7 @@ import (
 )
 
 func TestScenario_StdoutDelivery(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 	capture := newLineCapture()
 	startPipeline(t, connStr, []string{"stdout_test"}, stdout.New(capture, testLogger()))

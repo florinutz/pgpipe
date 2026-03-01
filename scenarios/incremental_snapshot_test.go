@@ -19,6 +19,7 @@ import (
 )
 
 func TestScenario_IncrementalSnapshot(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("signal-triggered snapshot alongside WAL", func(t *testing.T) {

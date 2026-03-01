@@ -113,6 +113,7 @@ func getObject(t *testing.T, client *s3.Client, bucket, key string) []byte {
 }
 
 func TestScenario_S3(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 	channel := createTrigger(t, connStr, "s3_events")
 	endpoint := startMinIO(t)

@@ -17,6 +17,7 @@ import (
 )
 
 func TestScenario_WebhookDelivery(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path", func(t *testing.T) {

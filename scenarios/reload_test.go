@@ -17,6 +17,7 @@ import (
 )
 
 func TestScenario_Reload(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 	channel := "reload_test"
 

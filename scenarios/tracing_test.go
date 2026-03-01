@@ -17,6 +17,7 @@ import (
 )
 
 func TestScenario_Tracing(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	// W3C traceparent: 00-{32 hex}-{16 hex}-{2 hex}

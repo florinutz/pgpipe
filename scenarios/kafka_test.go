@@ -101,6 +101,7 @@ func readOneRecord(t *testing.T, brokers []string, topic string, timeout time.Du
 }
 
 func TestScenario_KafkaAdapter(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path", func(t *testing.T) {

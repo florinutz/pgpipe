@@ -21,6 +21,7 @@ import (
 )
 
 func TestScenario_View(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path: count and sum with group by", func(t *testing.T) {
