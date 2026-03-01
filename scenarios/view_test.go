@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,6 +243,172 @@ func TestScenario_View(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("watermark-driven window", func(t *testing.T) {
+		table := "view_wm_events"
+		pubName := "pgcdc_view_wm_events"
+		createViewTableWithTS(t, connStr, table)
+		createPublication(t, connStr, pubName, table)
+
+		def, err := view.Parse("wm_window",
+			"SELECT COUNT(*) as cnt, payload.row.region "+
+				"FROM pgcdc_events "+
+				"WHERE channel = 'pgcdc:"+table+"' AND operation = 'INSERT' "+
+				"GROUP BY payload.row.region "+
+				"EVENT TIME BY payload.row.ts "+
+				"TUMBLING WINDOW 2s",
+			view.EmitRow, 0)
+		if err != nil {
+			t.Fatalf("parse view: %v", err)
+		}
+
+		logger := testLogger()
+		engine := view.NewEngine([]*view.ViewDef{def}, logger)
+		va := viewadapter.New(engine, logger)
+		capture := newLineCapture()
+		stdoutAdapter := stdout.New(capture, logger)
+		det := walreplication.New(connStr, pubName, 0, 0, false, false, logger)
+		b := bus.New(64, logger)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		va.SetIngestChan(b.Ingest())
+
+		g, gCtx := errgroup.WithContext(ctx)
+		g.Go(func() error { return b.Start(gCtx) })
+		g.Go(func() error { return det.Start(gCtx, b.Ingest()) })
+
+		viewSub, _ := b.Subscribe("view")
+		g.Go(func() error { return va.Start(gCtx, viewSub) })
+		stdoutSub, _ := b.Subscribe("stdout")
+		g.Go(func() error { return stdoutAdapter.Start(gCtx, stdoutSub) })
+
+		t.Cleanup(func() {
+			cancel()
+			g.Wait()
+		})
+
+		time.Sleep(3 * time.Second)
+
+		// Insert three events. The third event's ts is 10s ahead — its watermark
+		// (base+10s) will advance past the 2s window end, triggering a flush.
+		base := time.Now().UTC()
+		insertViewWMRow(t, connStr, table, "east", 100, base.Format(time.RFC3339Nano))
+		insertViewWMRow(t, connStr, table, "east", 200, base.Add(time.Second).Format(time.RFC3339Nano))
+		insertViewWMRow(t, connStr, table, "east", 300, base.Add(10*time.Second).Format(time.RFC3339Nano))
+
+		// Collect VIEW_RESULT events until the total count for 'east' reaches 3.
+		// Events may be split across multiple flush cycles; we just verify the total.
+		totalCnt := 0
+		deadline := time.After(10 * time.Second)
+		for totalCnt < 3 {
+			select {
+			case line := <-capture.lines:
+				var ev event.Event
+				if err := json.Unmarshal([]byte(line), &ev); err != nil {
+					continue
+				}
+				if ev.Operation != "VIEW_RESULT" {
+					continue
+				}
+				var p map[string]any
+				if err := json.Unmarshal(ev.Payload, &p); err != nil {
+					continue
+				}
+				if p["region"] != "east" {
+					continue
+				}
+				if cnt, ok := p["cnt"].(float64); ok {
+					totalCnt += int(cnt)
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for watermark-driven VIEW_RESULT (got total cnt=%d, want 3)", totalCnt)
+			}
+		}
+	})
+
+	t.Run("interval join matches correlated events", func(t *testing.T) {
+		ordersTable := "join_orders"
+		paymentsTable := "join_payments"
+		pubName := "pgcdc_join_test"
+
+		createJoinTable(t, connStr, ordersTable, "order_id TEXT, product TEXT")
+		createJoinTable(t, connStr, paymentsTable, "order_id TEXT, amount TEXT")
+		createMultiTablePublication(t, connStr, pubName, ordersTable, paymentsTable)
+
+		def, err := view.Parse("order_payment_join",
+			"SELECT a.payload.row.product, b.payload.row.amount "+
+				"FROM pgcdc_events a "+
+				"JOIN pgcdc_events b "+
+				"ON a.payload.row.order_id = b.payload.row.order_id "+
+				"WITHIN 5s "+
+				"WHERE a.channel = 'pgcdc:"+ordersTable+"' AND b.channel = 'pgcdc:"+paymentsTable+"'",
+			view.EmitRow, 0)
+		if err != nil {
+			t.Fatalf("parse join view: %v", err)
+		}
+
+		logger := testLogger()
+		engine := view.NewEngine([]*view.ViewDef{def}, logger)
+		va := viewadapter.New(engine, logger)
+		capture := newLineCapture()
+		stdoutAdapter := stdout.New(capture, logger)
+		det := walreplication.New(connStr, pubName, 0, 0, false, false, logger)
+		b := bus.New(64, logger)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		va.SetIngestChan(b.Ingest())
+
+		g, gCtx := errgroup.WithContext(ctx)
+		g.Go(func() error { return b.Start(gCtx) })
+		g.Go(func() error { return det.Start(gCtx, b.Ingest()) })
+
+		viewSub, _ := b.Subscribe("view")
+		g.Go(func() error { return va.Start(gCtx, viewSub) })
+		stdoutSub, _ := b.Subscribe("stdout")
+		g.Go(func() error { return stdoutAdapter.Start(gCtx, stdoutSub) })
+
+		t.Cleanup(func() {
+			cancel()
+			g.Wait()
+		})
+
+		time.Sleep(3 * time.Second)
+
+		// Insert a matching order + payment pair with the same order_id.
+		insertJoinRow(t, connStr, ordersTable, "order_id, product", "ORD-001", "widget")
+		insertJoinRow(t, connStr, paymentsTable, "order_id, amount", "ORD-001", "9.99")
+
+		// Wait for the interval join to emit a VIEW_RESULT.
+		deadline := time.After(10 * time.Second)
+		for {
+			select {
+			case line := <-capture.lines:
+				var ev event.Event
+				if err := json.Unmarshal([]byte(line), &ev); err != nil {
+					continue
+				}
+				if ev.Operation != "VIEW_RESULT" {
+					continue
+				}
+				if ev.Channel != "pgcdc:_view:order_payment_join" {
+					continue
+				}
+				var p map[string]any
+				if err := json.Unmarshal(ev.Payload, &p); err != nil {
+					t.Fatalf("unmarshal join result: %v", err)
+				}
+				if p["a_product"] != "widget" {
+					t.Errorf("a_product = %v, want widget", p["a_product"])
+				}
+				if p["b_amount"] != "9.99" {
+					t.Errorf("b_amount = %v, want 9.99", p["b_amount"])
+				}
+				return // Success.
+			case <-deadline:
+				t.Fatal("timed out waiting for interval join VIEW_RESULT")
+			}
+		}
+	})
 }
 
 // createViewTable creates a table with explicit region and amount columns.
@@ -280,5 +447,116 @@ func insertViewOrderRow(t *testing.T, connStr, table, region string, amount floa
 	_, err = conn.Exec(ctx, fmt.Sprintf("INSERT INTO %s (region, amount) VALUES ($1, $2)", pgx.Identifier{table}.Sanitize()), region, amount)
 	if err != nil {
 		t.Fatalf("insertViewOrderRow: %v", err)
+	}
+}
+
+// createViewTableWithTS creates a table with region, amount, and a TEXT ts column for watermark tests.
+func createViewTableWithTS(t *testing.T, connStr, table string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		t.Fatalf("createViewTableWithTS connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	safeTable := pgx.Identifier{table}.Sanitize()
+	if _, err := conn.Exec(ctx, fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, region TEXT, amount NUMERIC, ts TEXT)`, safeTable,
+	)); err != nil {
+		t.Fatalf("createViewTableWithTS: %v", err)
+	}
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s REPLICA IDENTITY FULL`, safeTable)); err != nil {
+		t.Fatalf("createViewTableWithTS set replica identity: %v", err)
+	}
+}
+
+// insertViewWMRow inserts a watermark-test row with an explicit RFC3339 timestamp string.
+func insertViewWMRow(t *testing.T, connStr, table, region string, amount float64, ts string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		t.Fatalf("insertViewWMRow connect: %v", err)
+	}
+	defer conn.Close(ctx)
+	_, err = conn.Exec(ctx,
+		fmt.Sprintf("INSERT INTO %s (region, amount, ts) VALUES ($1, $2, $3)", pgx.Identifier{table}.Sanitize()),
+		region, amount, ts,
+	)
+	if err != nil {
+		t.Fatalf("insertViewWMRow: %v", err)
+	}
+}
+
+// createJoinTable creates a generic join test table with the given extra columns.
+func createJoinTable(t *testing.T, connStr, table, extraCols string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		t.Fatalf("createJoinTable connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	safeTable := pgx.Identifier{table}.Sanitize()
+	if _, err := conn.Exec(ctx, fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS %s (id SERIAL PRIMARY KEY, %s)`, safeTable, extraCols,
+	)); err != nil {
+		t.Fatalf("createJoinTable %s: %v", table, err)
+	}
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s REPLICA IDENTITY FULL`, safeTable)); err != nil {
+		t.Fatalf("createJoinTable set replica identity: %v", err)
+	}
+}
+
+// createMultiTablePublication creates a publication covering multiple tables.
+func createMultiTablePublication(t *testing.T, connStr, pubName string, tables ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		t.Fatalf("createMultiTablePublication connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	safeNames := make([]string, len(tables))
+	for i, tbl := range tables {
+		safeNames[i] = pgx.Identifier{tbl}.Sanitize()
+	}
+	sql := fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s",
+		pgx.Identifier{pubName}.Sanitize(),
+		strings.Join(safeNames, ", "),
+	)
+	if _, err := conn.Exec(ctx, sql); err != nil {
+		t.Fatalf("createMultiTablePublication: %v", err)
+	}
+}
+
+// insertJoinRow inserts a row into a join test table with two TEXT value columns.
+func insertJoinRow(t *testing.T, connStr, table, cols, val1, val2 string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		t.Fatalf("insertJoinRow connect: %v", err)
+	}
+	defer conn.Close(ctx)
+	parts := strings.SplitN(cols, ", ", 2)
+	_, err = conn.Exec(ctx,
+		fmt.Sprintf("INSERT INTO %s (%s, %s) VALUES ($1, $2)",
+			pgx.Identifier{table}.Sanitize(), parts[0], parts[1]),
+		val1, val2,
+	)
+	if err != nil {
+		t.Fatalf("insertJoinRow: %v", err)
 	}
 }

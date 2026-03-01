@@ -68,7 +68,7 @@ func (sw *SlidingWindow) aggCount() int {
 }
 
 // Add processes one event into the current sub-window.
-func (sw *SlidingWindow) Add(meta EventMeta, payload map[string]any) {
+func (sw *SlidingWindow) Add(meta EventMeta, payload map[string]any, eventTime time.Time) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
@@ -216,6 +216,11 @@ func (sw *SlidingWindow) Flush() []event.Event {
 
 	metrics.ViewWindowsEmitted.WithLabelValues(sw.def.Name).Add(float64(len(events)))
 	return events
+}
+
+// FlushUpTo delegates to Flush for sliding windows.
+func (sw *SlidingWindow) FlushUpTo(wm time.Time) []event.Event {
+	return sw.Flush()
 }
 
 // mergeSubWindows combines aggregation state across all sub-windows.

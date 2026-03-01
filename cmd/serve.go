@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,8 +30,10 @@ import (
 
 // ServeConfig is the top-level config for multi-pipeline mode.
 type ServeConfig struct {
-	Pipelines []server.PipelineConfig `yaml:"pipelines"`
-	Addr      string                  `yaml:"addr"`
+	Pipelines   []server.PipelineConfig `yaml:"pipelines"`
+	Addr        string                  `yaml:"addr"`
+	TLSCertFile string                  `yaml:"tls_cert_file"`
+	TLSKeyFile  string                  `yaml:"tls_key_file"`
 }
 
 var serveCmd = &cobra.Command{
@@ -56,12 +60,16 @@ Example config (pipelines.yaml):
 func init() {
 	serveCmd.Flags().String("config", "pipelines.yaml", "pipeline config file")
 	serveCmd.Flags().String("addr", ":8080", "HTTP server address for API + metrics + health")
+	serveCmd.Flags().String("tls-cert", "", "path to TLS certificate file")
+	serveCmd.Flags().String("tls-key", "", "path to TLS private key file")
 	rootCmd.AddCommand(serveCmd)
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
 	configFile, _ := cmd.Flags().GetString("config")
 	addr, _ := cmd.Flags().GetString("addr")
+	tlsCert, _ := cmd.Flags().GetString("tls-cert")
+	tlsKey, _ := cmd.Flags().GetString("tls-key")
 
 	logger := slog.Default()
 
@@ -82,6 +90,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	if cfg.Addr != "" && addr == ":8080" {
 		addr = cfg.Addr
+	}
+
+	// TLS: CLI flags override config file values.
+	if tlsCert == "" {
+		tlsCert = cfg.TLSCertFile
+	}
+	if tlsKey == "" {
+		tlsKey = cfg.TLSKeyFile
 	}
 
 	mgr := server.NewManager(registryPipelineBuilder, logger)
@@ -125,8 +141,24 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	g.Go(func() error {
-		logger.Info("HTTP server started", "addr", addr, "pipelines", len(cfg.Pipelines))
-		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
+		ln, lnErr := net.Listen("tcp", addr)
+		if lnErr != nil {
+			return fmt.Errorf("http listen: %w", lnErr)
+		}
+		if tlsCert != "" && tlsKey != "" {
+			cert, certErr := tls.LoadX509KeyPair(tlsCert, tlsKey)
+			if certErr != nil {
+				return fmt.Errorf("load TLS cert: %w", certErr)
+			}
+			ln = tls.NewListener(ln, &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			})
+			logger.Info("HTTPS server started", "addr", addr)
+		} else {
+			logger.Info("HTTP server started", "addr", addr, "pipelines", len(cfg.Pipelines))
+		}
+		if err := httpServer.Serve(ln); err != http.ErrServerClosed {
 			return fmt.Errorf("http server: %w", err)
 		}
 		return nil

@@ -15,8 +15,8 @@ func TestSlidingWindow_OverlappingResults(t *testing.T) {
 	sw := NewSlidingWindow(def, nil)
 
 	// Add events to the current sub-window (slot 0).
-	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 1})
-	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 2})
+	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 1}, time.Time{})
+	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 2}, time.Time{})
 
 	// First flush: aggregates across all sub-windows (only slot 0 has data).
 	// Then evicts oldest and rotates.
@@ -35,7 +35,7 @@ func TestSlidingWindow_OverlappingResults(t *testing.T) {
 	}
 
 	// Add more events to the new current slot.
-	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 3})
+	sw.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 3}, time.Time{})
 
 	// Second flush: should see events from the remaining old slot + new slot.
 	// The first slot's 2 events are still in the window, plus the new 1 event = 3 total.
@@ -63,8 +63,8 @@ func TestSlidingWindow_SubWindowEviction(t *testing.T) {
 	sw := NewSlidingWindow(def, nil)
 
 	// Add events to first slot.
-	sw.Add(EventMeta{}, map[string]any{"id": 1})
-	sw.Add(EventMeta{}, map[string]any{"id": 2})
+	sw.Add(EventMeta{}, map[string]any{"id": 1}, time.Time{})
+	sw.Add(EventMeta{}, map[string]any{"id": 2}, time.Time{})
 
 	// First flush: both events visible, evicts oldest slot (slot 1), current moves to slot 1.
 	events := sw.Flush()
@@ -78,7 +78,7 @@ func TestSlidingWindow_SubWindowEviction(t *testing.T) {
 	}
 
 	// Add event to second slot.
-	sw.Add(EventMeta{}, map[string]any{"id": 3})
+	sw.Add(EventMeta{}, map[string]any{"id": 3}, time.Time{})
 
 	// Second flush: slot 0 still has 2 events, slot 1 has 1 event = 3 total.
 	// Then evicts slot 0, current moves to slot 0.
@@ -119,8 +119,8 @@ func TestSlidingWindow_GroupBy(t *testing.T) {
 
 	sw := NewSlidingWindow(def, nil)
 
-	sw.Add(EventMeta{}, map[string]any{"region": "us-east"})
-	sw.Add(EventMeta{}, map[string]any{"region": "eu-west"})
+	sw.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
+	sw.Add(EventMeta{}, map[string]any{"region": "eu-west"}, time.Time{})
 
 	events := sw.Flush()
 	if len(events) != 2 {
@@ -177,7 +177,7 @@ func TestSlidingWindow_WindowInfo(t *testing.T) {
 	}
 
 	sw := NewSlidingWindow(def, nil)
-	sw.Add(EventMeta{}, map[string]any{})
+	sw.Add(EventMeta{}, map[string]any{}, time.Time{})
 
 	events := sw.Flush()
 	if len(events) != 1 {

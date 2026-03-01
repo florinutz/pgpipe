@@ -252,6 +252,43 @@ pgcdc listen --all-tables -a stdout \
 
 Aggregates: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `COUNT(DISTINCT ...)`, `STDDEV`. Results re-injected as `VIEW_RESULT` events.
 
+### Watermarks (event-time windows)
+
+Drive window flushing from a timestamp field in the payload instead of the wall clock:
+
+```bash
+# Windows flush when the watermark (max seen ts - lateness) passes the window boundary.
+pgcdc listen --all-tables -a stdout \
+  --view-query 'orders:SELECT region, COUNT(*) as cnt
+    FROM pgcdc_events
+    WHERE channel = '"'"'pgcdc:orders'"'"'
+    GROUP BY payload.row.region
+    EVENT TIME BY payload.row.created_at
+    ALLOWED LATENESS 5s
+    TUMBLING WINDOW 1m' \
+  --db postgres://...
+```
+
+`EVENT TIME BY <field>` extracts the event timestamp from a dotted payload path (e.g. `payload.row.created_at`). The field must contain an RFC3339 timestamp string. `ALLOWED LATENESS` (default 0s) controls how much watermark lag is tolerated before closing a window.
+
+### Interval joins
+
+Match events from two channels where a key field is equal and both events arrive within a `WITHIN` window:
+
+```bash
+pgcdc listen --all-tables -a stdout \
+  --view-query 'matched:SELECT a.payload.row.order_id, b.payload.row.amount
+    FROM pgcdc_events a
+    JOIN pgcdc_events b
+    ON a.payload.row.order_id = b.payload.row.id
+    WITHIN 30s
+    WHERE a.channel = '"'"'pgcdc:orders'"'"'
+      AND b.channel = '"'"'pgcdc:payments'"'"'' \
+  --db postgres://...
+```
+
+Matched pairs emit immediately as `VIEW_RESULT` events on `pgcdc:_view:<name>`. `SELECT` can reference `a.<field>` and `b.<field>`. No `GROUP BY` or `WINDOW` clause is needed.
+
 ## Kafka Wire Protocol Server
 
 Any Kafka consumer library connects directly to pgcdc — no Kafka cluster needed:
@@ -264,6 +301,23 @@ kcat -b localhost:9092 -t pgcdc.public.orders -C
 ```
 
 Channels become topics, events hash across N partitions, consumer groups with partition assignment and heartbeat reaping. Supports all 11 Kafka API keys.
+
+## TLS
+
+Enable HTTPS for the SSE/WebSocket/health/metrics HTTP server:
+
+```bash
+pgcdc listen --sse-tls-cert /etc/ssl/certs/server.crt \
+             --sse-tls-key  /etc/ssl/private/server.key \
+             ...
+```
+
+Flags:
+- `--sse-tls-cert` / `--sse-tls-key` — TLS cert and key for the main HTTP server (SSE, WebSocket, GraphQL, healthz, metrics)
+- `--metrics-tls-cert` / `--metrics-tls-key` — TLS for the separate Prometheus metrics server when `--metrics-addr` is set
+- `--tls-cert` / `--tls-key` — TLS for the `pgcdc serve` multi-pipeline API server
+
+When cert/key are absent the server runs plain HTTP (default, backward-compatible).
 
 ## Production Features
 

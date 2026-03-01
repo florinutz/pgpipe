@@ -22,6 +22,10 @@ func init() {
 				Type:        "[]string",
 				Description: "Streaming SQL view query: name:query (repeatable, e.g. --view-query 'counts:SELECT COUNT(*) FROM pgcdc_events GROUP BY channel TUMBLING WINDOW 1m')",
 			},
+			{
+				Name:        "event_time_field",
+				Description: "payload field path for event-time watermarks (e.g. payload.row.created_at)",
+			},
 		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			defs, err := parseViewConfigs(ctx.Cfg.Views)

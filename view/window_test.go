@@ -19,9 +19,9 @@ func TestTumblingWindow_BasicCount(t *testing.T) {
 	def := testViewDef(t, "SELECT COUNT(*) as n FROM pgcdc_events TUMBLING WINDOW 1m", EmitRow)
 	w := NewTumblingWindow(def, nil)
 
-	w.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 1})
-	w.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 2})
-	w.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 3})
+	w.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 1}, time.Time{})
+	w.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 2}, time.Time{})
+	w.Add(EventMeta{Channel: "pgcdc:orders", Operation: "INSERT"}, map[string]any{"id": 3}, time.Time{})
 
 	events := w.Flush()
 	if len(events) != 1 {
@@ -55,9 +55,9 @@ func TestTumblingWindow_GroupBy(t *testing.T) {
 		EmitRow)
 	w := NewTumblingWindow(def, nil)
 
-	w.Add(EventMeta{}, map[string]any{"region": "us-east", "amount": float64(100)})
-	w.Add(EventMeta{}, map[string]any{"region": "us-east", "amount": float64(200)})
-	w.Add(EventMeta{}, map[string]any{"region": "eu-west", "amount": float64(50)})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east", "amount": float64(100)}, time.Time{})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east", "amount": float64(200)}, time.Time{})
+	w.Add(EventMeta{}, map[string]any{"region": "eu-west", "amount": float64(50)}, time.Time{})
 
 	events := w.Flush()
 	if len(events) != 2 {
@@ -108,12 +108,12 @@ func TestTumblingWindow_Having(t *testing.T) {
 	w := NewTumblingWindow(def, nil)
 
 	// us-east: 3 events (passes HAVING > 2)
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
 
 	// eu-west: 1 event (filtered by HAVING)
-	w.Add(EventMeta{}, map[string]any{"region": "eu-west"})
+	w.Add(EventMeta{}, map[string]any{"region": "eu-west"}, time.Time{})
 
 	events := w.Flush()
 	if len(events) != 1 {
@@ -138,8 +138,8 @@ func TestTumblingWindow_BatchEmit(t *testing.T) {
 		EmitBatch)
 	w := NewTumblingWindow(def, nil)
 
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
-	w.Add(EventMeta{}, map[string]any{"region": "eu-west"})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
+	w.Add(EventMeta{}, map[string]any{"region": "eu-west"}, time.Time{})
 
 	events := w.Flush()
 	if len(events) != 1 {
@@ -174,7 +174,7 @@ func TestTumblingWindow_MaxGroups(t *testing.T) {
 
 	// Add 5 unique groups — only 3 should be stored.
 	for i := 0; i < 5; i++ {
-		w.Add(EventMeta{}, map[string]any{"id": float64(i)})
+		w.Add(EventMeta{}, map[string]any{"id": float64(i)}, time.Time{})
 	}
 
 	events := w.Flush()
@@ -187,7 +187,7 @@ func TestTumblingWindow_WindowPayloadHasTimestamps(t *testing.T) {
 	def := testViewDef(t, "SELECT COUNT(*) as n FROM pgcdc_events TUMBLING WINDOW 1m", EmitRow)
 	w := NewTumblingWindow(def, nil)
 
-	w.Add(EventMeta{}, map[string]any{})
+	w.Add(EventMeta{}, map[string]any{}, time.Time{})
 
 	events := w.Flush()
 	if len(events) != 1 {
@@ -225,8 +225,8 @@ func TestTumblingWindow_FlushResets(t *testing.T) {
 	def := testViewDef(t, "SELECT COUNT(*) as n FROM pgcdc_events TUMBLING WINDOW 1m", EmitRow)
 	w := NewTumblingWindow(def, nil)
 
-	w.Add(EventMeta{}, map[string]any{})
-	w.Add(EventMeta{}, map[string]any{})
+	w.Add(EventMeta{}, map[string]any{}, time.Time{})
+	w.Add(EventMeta{}, map[string]any{}, time.Time{})
 
 	events := w.Flush()
 	if len(events) != 1 {
@@ -259,8 +259,8 @@ func TestTumblingWindow_LateEvent(t *testing.T) {
 	w := NewTumblingWindow(def, nil)
 
 	// Add events and flush the first window.
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
 
 	events := w.Flush()
 	if len(events) != 1 {
@@ -274,7 +274,7 @@ func TestTumblingWindow_LateEvent(t *testing.T) {
 	}
 
 	// Now add a late event for the same group key.
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
 
 	// Flush again: the late event should cause a re-emit of the corrected window.
 	events = w.Flush()
@@ -303,14 +303,14 @@ func TestTumblingWindow_LateEventExpiry(t *testing.T) {
 	w := NewTumblingWindow(def, nil)
 
 	// Add events and flush.
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
 	w.Flush()
 
 	// Wait for the allowed lateness to expire.
 	time.Sleep(60 * time.Millisecond)
 
 	// Add a late event — it should NOT be added to the expired closed window.
-	w.Add(EventMeta{}, map[string]any{"region": "us-east"})
+	w.Add(EventMeta{}, map[string]any{"region": "us-east"}, time.Time{})
 
 	// Flush: the late event should be in the current window (not re-emitted from closed).
 	events := w.Flush()

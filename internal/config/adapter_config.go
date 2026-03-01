@@ -22,6 +22,8 @@ type SSEConfig struct {
 	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval"`
 	ReadTimeout       time.Duration `mapstructure:"read_timeout"`
 	IdleTimeout       time.Duration `mapstructure:"idle_timeout"`
+	TLSCertFile       string        `mapstructure:"tls_cert_file"`
+	TLSKeyFile        string        `mapstructure:"tls_key_file"`
 }
 
 type FileConfig struct {
@@ -161,10 +163,11 @@ type KafkaServerConfig struct {
 }
 
 type ViewConfig struct {
-	Name      string `mapstructure:"name"`
-	Query     string `mapstructure:"query"`
-	Emit      string `mapstructure:"emit"`       // "row" (default) or "batch"
-	MaxGroups int    `mapstructure:"max_groups"` // default 100000
+	Name           string `mapstructure:"name"`
+	Query          string `mapstructure:"query"`
+	Emit           string `mapstructure:"emit"`             // "row" (default) or "batch"
+	MaxGroups      int    `mapstructure:"max_groups"`       // default 100000
+	EventTimeField string `mapstructure:"event_time_field"` // payload field path for event-time watermarks
 }
 
 type ArrowConfig struct {
