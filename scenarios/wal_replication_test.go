@@ -16,6 +16,7 @@ import (
 )
 
 func TestScenario_WALReplication(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path", func(t *testing.T) {

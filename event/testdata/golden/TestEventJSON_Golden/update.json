@@ -1,0 +1,19 @@
+{
+  "id": "019576a0-0000-7000-8000-000000000002",
+  "channel": "pgcdc:orders",
+  "operation": "UPDATE",
+  "payload": {
+    "op": "UPDATE",
+    "table": "orders",
+    "row": {
+      "id": 1,
+      "status": "shipped"
+    },
+    "old": {
+      "id": 1,
+      "status": "new"
+    }
+  },
+  "source": "wal_replication",
+  "created_at": "2025-06-15T12:00:00Z"
+}

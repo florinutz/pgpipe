@@ -53,8 +53,9 @@ func TestMain(m *testing.M) {
 		Cmd: []string{
 			"postgres",
 			"-c", "wal_level=logical",
-			"-c", "max_replication_slots=4",
-			"-c", "max_wal_senders=4",
+			"-c", "max_replication_slots=60",
+			"-c", "max_wal_senders=60",
+			"-c", "max_connections=200",
 		},
 		WaitingFor: wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
 	}

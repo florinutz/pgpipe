@@ -23,6 +23,7 @@ import (
 // TestScenario_Backpressure verifies source-aware backpressure:
 // zone transitions, throttling, and load shedding.
 func TestScenario_Backpressure(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path", func(t *testing.T) {

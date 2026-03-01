@@ -13,6 +13,7 @@ import (
 )
 
 func TestScenario_CLIValidation(t *testing.T) {
+	t.Parallel()
 	t.Run("missing --db", func(t *testing.T) {
 		output, err := runPGCDC("listen", "--channel", "orders")
 		if err == nil {

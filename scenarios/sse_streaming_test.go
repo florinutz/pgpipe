@@ -15,6 +15,7 @@ import (
 )
 
 func TestScenario_SSEStreaming(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 	logger := testLogger()
 

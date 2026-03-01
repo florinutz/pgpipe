@@ -12,6 +12,7 @@ import (
 )
 
 func TestScenario_Reconnection(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 	capture := newLineCapture()
 	startPipeline(t, connStr, []string{"reconnect_test"}, stdout.New(capture, testLogger()))
@@ -66,6 +67,7 @@ func TestScenario_Reconnection(t *testing.T) {
 }
 
 func TestScenario_WALReconnection(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	createTable(t, connStr, "wal_reconnect_orders")

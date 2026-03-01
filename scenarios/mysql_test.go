@@ -117,6 +117,7 @@ func startMySQLPipeline(t *testing.T, addr, user, password string, tables []stri
 }
 
 func TestScenario_MySQL(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("PGCDC_TEST_MYSQL") == "" && os.Getenv("CI") == "" {
 		t.Skip("set PGCDC_TEST_MYSQL=1 or CI=1 to run MySQL scenario (requires Docker with MySQL image)")
 	}

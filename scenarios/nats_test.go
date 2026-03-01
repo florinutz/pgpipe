@@ -22,6 +22,7 @@ import (
 )
 
 func TestScenario_Nats(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path", func(t *testing.T) {

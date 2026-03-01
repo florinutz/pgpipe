@@ -51,6 +51,7 @@ func ensureKafkaTopic(t *testing.T, brokers []string, topic string) {
 }
 
 func TestScenario_Encoding(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("kafka avro encoding", func(t *testing.T) {

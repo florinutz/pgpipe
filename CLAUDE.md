@@ -99,7 +99,7 @@ Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical repli
 - **Unit tests** (`*_test.go` in package dirs): pure logic only — no I/O, no network, no goroutines.
 - **Scenario tests** (`scenarios/*_test.go`): full pipeline with real Postgres (testcontainers). One file per user journey. Primary regression barrier.
 
-**Makefile targets:** `make test` (unit, ~2s) | `make test-scenarios` (Docker, ~30s) | `make test-all` | `make lint` | `make coverage`
+**Makefile targets:** `make test` (unit, ~2s) | `make test-scenarios` (Docker, ~60-90s parallel) | `make test-all` | `make lint` | `make coverage` | `make coverage-gate` | `make test-smoke` (<15s) | `make fuzz`
 
 **Agent workflow — after every change:**
 1. Run `make test-all` — all tests must pass before task is done.
@@ -112,9 +112,21 @@ Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical repli
 
 **Do NOT test:** third-party library behavior, stdlib, simple constructors, config defaults, any path already covered by a scenario. Never write both a unit test and a scenario for the same code path.
 
-**Scenario file structure:** `//go:build integration` tag, `TestScenario_<Name>` top-level, `t.Run("happy path", ...)` + `t.Run("<failure>", ...)`, shared helpers from `scenarios/helpers_test.go`.
+**Scenario file structure:** `//go:build integration` tag, `TestScenario_<Name>` top-level, `t.Parallel()` as FIRST line, `t.Run("happy path", ...)` + `t.Run("<failure>", ...)`, shared helpers from `scenarios/helpers_test.go`.
 
-**Max scenarios:** 42 — consolidate related ones before adding new ones. Currently at 37.
+**Max scenarios:** 42 — consolidate related ones before adding new ones. Currently at 42.
+
+**Parallel scenarios:** All `TestScenario_*` functions call `t.Parallel()`. The shared PG container supports concurrency: `max_replication_slots=60`, `max_wal_senders=60`, `max_connections=200`.
+
+**testutil/ package:** Pure-Go test helpers importable from any package (not a `_test.go` file). Use `testutil.NewLineCapture()`, `testutil.MakeEvent()`, `testutil.MakeEvents()`, `testutil.StartTestBus()`. Do not duplicate these in individual packages.
+
+**No time.Sleep for init waits:** Use a `ready chan struct{}` pattern (adapter) or probe functions (detector). `time.Sleep` only for external I/O that has no observable side effect.
+
+**Coverage gate:** `make coverage-gate` enforces ≥75% coverage on pure-logic packages (transform, view, cel, bus, ack, backpressure, encoding, internal/circuitbreaker, internal/ratelimit).
+
+**Golden files:** `event/testdata/golden/` holds expected JSON snapshots for event serialization. Regenerate with `go test -run TestEventJSON_Golden -args -update ./event/`. Breaking a golden file (e.g. renaming a payload field) fails `make test`.
+
+**Fuzz targets:** `view/parser_fuzz_test.go` (FuzzParse), `cel/cel_fuzz_test.go` (FuzzCompile), `adapter/kafkaserver/` (protocol), `transform/` (chain). Run all with `make fuzz`.
 
 ## Code Organization
 

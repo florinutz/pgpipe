@@ -143,6 +143,7 @@ func startMongoDBPipeline(t *testing.T, uri, database string, collections []stri
 }
 
 func TestScenario_MongoDB(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("PGCDC_TEST_MONGODB") == "" && os.Getenv("CI") == "" {
 		t.Skip("set PGCDC_TEST_MONGODB=1 or CI=1 to run MongoDB scenario (requires Docker with MongoDB image)")
 	}

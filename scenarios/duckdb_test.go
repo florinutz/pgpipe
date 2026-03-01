@@ -15,6 +15,7 @@ import (
 )
 
 func TestScenario_DuckDB(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("happy path", func(t *testing.T) {

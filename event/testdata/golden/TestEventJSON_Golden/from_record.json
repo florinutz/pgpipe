@@ -1,0 +1,16 @@
+{
+  "id": "019576a0-0000-7000-8000-000000000005",
+  "channel": "pgcdc:users",
+  "operation": "INSERT",
+  "payload": {
+    "old": null,
+    "op": "INSERT",
+    "row": {
+      "id": 42,
+      "name": "alice"
+    },
+    "table": "users"
+  },
+  "source": "wal_replication",
+  "created_at": "2025-06-15T12:00:00Z"
+}

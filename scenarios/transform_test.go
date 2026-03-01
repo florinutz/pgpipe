@@ -16,6 +16,7 @@ import (
 )
 
 func TestScenario_Transform(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 	channel := "transform_test"
 

@@ -18,6 +18,7 @@ import (
 )
 
 func TestScenario_HealthEndpoint(t *testing.T) {
+	t.Parallel()
 	logger := testLogger()
 	broker := sse.New(256, 15*time.Second, logger)
 

@@ -23,6 +23,7 @@ import (
 const pluginDir = "../testdata/plugins/"
 
 func TestScenario_WasmPlugin(t *testing.T) {
+	t.Parallel()
 	connStr := startPostgres(t)
 
 	t.Run("transform drops field", func(t *testing.T) {

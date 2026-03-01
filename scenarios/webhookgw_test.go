@@ -22,6 +22,7 @@ import (
 )
 
 func TestScenario_WebhookGateway(t *testing.T) {
+	t.Parallel()
 	t.Run("happy path", func(t *testing.T) {
 		sources := []*webhookgw.Source{{Name: "test", ChannelPrefix: "pgcdc:test"}}
 		det := webhookgw.New(sources, 0, testLogger())
