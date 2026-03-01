@@ -246,7 +246,7 @@ func TestAPI_ListPipelines(t *testing.T) {
 	}
 
 	var body map[string]any
-	json.NewDecoder(rec.Body).Decode(&body)
+	_ = json.NewDecoder(rec.Body).Decode(&body)
 	count := int(body["count"].(float64))
 	if count != 2 {
 		t.Errorf("expected count 2, got %d", count)
@@ -363,7 +363,7 @@ func TestPipelineInfo_JSON(t *testing.T) {
 	}
 
 	var decoded map[string]any
-	json.Unmarshal(data, &decoded)
+	_ = json.Unmarshal(data, &decoded)
 	if decoded["name"] != "orders" {
 		t.Errorf("expected name 'orders', got %v", decoded["name"])
 	}
@@ -606,7 +606,7 @@ func TestAPI_ResumePipeline(t *testing.T) {
 	}
 
 	// Clean up.
-	mgr.Stop("orders")
+	_ = mgr.Stop("orders")
 }
 
 func TestAPI_ResumeNotPaused(t *testing.T) {

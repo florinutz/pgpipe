@@ -167,6 +167,25 @@ type ViewConfig struct {
 	MaxGroups int    `mapstructure:"max_groups"` // default 100000
 }
 
+type ArrowConfig struct {
+	Addr       string `mapstructure:"addr"`
+	BufferSize int    `mapstructure:"buffer_size"`
+}
+
+type GraphQLConfig struct {
+	Path              string        `mapstructure:"path"`
+	SchemaAware       bool          `mapstructure:"schema_aware"`
+	BufferSize        int           `mapstructure:"buffer_size"`
+	KeepaliveInterval time.Duration `mapstructure:"keepalive_interval"`
+}
+
+type DuckDBConfig struct {
+	Path          string        `mapstructure:"path"`
+	Retention     time.Duration `mapstructure:"retention"`
+	FlushInterval time.Duration `mapstructure:"flush_interval"`
+	FlushSize     int           `mapstructure:"flush_size"`
+}
+
 type MiddlewareConfig struct {
 	Retry          *MiddlewareRetryConfig          `mapstructure:"retry"`
 	CircuitBreaker *MiddlewareCircuitBreakerConfig `mapstructure:"circuit_breaker"`

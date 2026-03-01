@@ -18,11 +18,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/florinutz/pgcdc"
+	"github.com/go-chi/chi/v5"
+
 	"github.com/florinutz/pgcdc/adapter/middleware"
 	"github.com/florinutz/pgcdc/adapter/sse"
 	"github.com/florinutz/pgcdc/adapter/ws"
 	"github.com/florinutz/pgcdc/backpressure"
 	"github.com/florinutz/pgcdc/bus"
+	"github.com/florinutz/pgcdc/detector"
 	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/encoding"
 	encregistry "github.com/florinutz/pgcdc/encoding/registry"
@@ -283,6 +286,12 @@ func bindListenFlags(cmd *cobra.Command, _ []string) error {
 		{"mongodb-metadata-db", "mongodb.metadata_db"},
 		{"mongodb-metadata-coll", "mongodb.metadata_coll"},
 
+		// SQLite.
+		{"sqlite-db", "sqlite.db_path"},
+		{"sqlite-poll-interval", "sqlite.poll_interval"},
+		{"sqlite-batch-size", "sqlite.batch_size"},
+		{"sqlite-keep-processed", "sqlite.keep_processed"},
+
 		// Shared encoding / Schema Registry.
 		{"schema-registry-url", "encoding.schema_registry_url"},
 		{"schema-registry-username", "encoding.schema_registry_username"},
@@ -304,6 +313,10 @@ func bindListenFlags(cmd *cobra.Command, _ []string) error {
 		// Nack window.
 		{"dlq-window-size", "dlq.window_size"},
 		{"dlq-window-threshold", "dlq.window_threshold"},
+
+		// Webhook gateway.
+		{"webhookgw-max-body", "webhook_gateway.max_body_size"},
+		{"webhookgw-source", "webhook_gateway.cli_sources"},
 
 		// Multi-detector.
 		{"detector-mode", "detector_mode"},
@@ -453,8 +466,14 @@ func runListen(cmd *cobra.Command, args []string) error {
 	}
 	opts = append(opts, detOpts...)
 
+	// Check if detector needs HTTP routes.
+	var detectorMountFn func(chi.Router)
+	if m, ok := detResult.Detector.(detector.HTTPMountable); ok {
+		detectorMountFn = m.MountHTTP
+	}
+
 	// Create adapters.
-	adapterOpts, sseBroker, wsBroker, adapterCleanup, adapterErr := setupAdapters(ctx, cfg, cmd, wasmRT, kafkaEncoder, natsEncoder, logger)
+	adapterOpts, sseBroker, wsBroker, adapterMountFns, adapterCleanup, adapterErr := setupAdapters(ctx, cfg, cmd, wasmRT, kafkaEncoder, natsEncoder, logger)
 	if adapterErr != nil {
 		return adapterErr
 	}
@@ -536,7 +555,11 @@ func runListen(cmd *cobra.Command, args []string) error {
 	startSIGHUPHandler(g, gCtx, p, immutableCLI, plugTfx, cliRoutes, logger)
 
 	// HTTP servers: SSE/WS combined and standalone metrics.
-	startHTTPServers(g, gCtx, cfg, sseBroker, wsBroker, p.Health(), readiness, insp, logger)
+	allMountFns := adapterMountFns
+	if detectorMountFn != nil {
+		allMountFns = append(allMountFns, detectorMountFn)
+	}
+	startHTTPServers(g, gCtx, cfg, sseBroker, wsBroker, p.Health(), readiness, insp, allMountFns, logger)
 
 	// Wait for errgroup to finish (happens when context is cancelled).
 	err := g.Wait()
@@ -776,8 +799,8 @@ func setupDetector(ctx context.Context, cfg config.Config, cmd *cobra.Command, t
 }
 
 // setupAdapters creates all configured adapters via the registry, plus view and plugin adapters.
-// Returns pipeline options, SSE/WS brokers for HTTP server setup, and a cleanup function.
-func setupAdapters(ctx context.Context, cfg config.Config, cmd *cobra.Command, wasmRT any, kafkaEncoder, natsEncoder encoding.Encoder, logger *slog.Logger) ([]pgcdc.Option, *sse.Broker, *ws.Broker, func(), error) {
+// Returns pipeline options, SSE/WS brokers, HTTP mount functions, and a cleanup function.
+func setupAdapters(ctx context.Context, cfg config.Config, cmd *cobra.Command, wasmRT any, kafkaEncoder, natsEncoder encoding.Encoder, logger *slog.Logger) ([]pgcdc.Option, *sse.Broker, *ws.Broker, []func(chi.Router), func(), error) {
 	adapterCtx := registry.AdapterContext{
 		Cfg:          cfg,
 		Logger:       logger,
@@ -789,11 +812,12 @@ func setupAdapters(ctx context.Context, cfg config.Config, cmd *cobra.Command, w
 	var opts []pgcdc.Option
 	var sseBroker *sse.Broker
 	var wsBroker *ws.Broker
+	var httpMountFns []func(chi.Router)
 
 	for _, name := range cfg.Adapters {
 		result, aErr := registry.CreateAdapter(name, adapterCtx)
 		if aErr != nil {
-			return nil, nil, nil, func() {}, fmt.Errorf("create adapter %s: %w", name, aErr)
+			return nil, nil, nil, nil, func() {}, fmt.Errorf("create adapter %s: %w", name, aErr)
 		}
 		opts = append(opts, pgcdc.WithAdapter(result.Adapter))
 
@@ -806,6 +830,9 @@ func setupAdapters(ctx context.Context, cfg config.Config, cmd *cobra.Command, w
 		if result.WSBroker != nil {
 			wsBroker = result.WSBroker
 		}
+		if m, ok := result.Adapter.(detector.HTTPMountable); ok {
+			httpMountFns = append(httpMountFns, m.MountHTTP)
+		}
 	}
 
 	// Parse --view-query CLI flags and merge with YAML views (CLI wins on name conflict).
@@ -813,7 +840,7 @@ func setupAdapters(ctx context.Context, cfg config.Config, cmd *cobra.Command, w
 	for _, vq := range viewQueryFlags {
 		parts := strings.SplitN(vq, ":", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return nil, nil, nil, func() {}, fmt.Errorf("invalid --view-query format %q: expected name:query", vq)
+			return nil, nil, nil, nil, func() {}, fmt.Errorf("invalid --view-query format %q: expected name:query", vq)
 		}
 		replaced := false
 		for i, vc := range cfg.Views {
@@ -844,7 +871,7 @@ func setupAdapters(ctx context.Context, cfg config.Config, cmd *cobra.Command, w
 			adapterCtx.Cfg = cfg // reflect updated views
 			result, aErr := registry.CreateAdapter("view", adapterCtx)
 			if aErr != nil {
-				return nil, nil, nil, func() {}, fmt.Errorf("create view adapter: %w", aErr)
+				return nil, nil, nil, nil, func() {}, fmt.Errorf("create view adapter: %w", aErr)
 			}
 			opts = append(opts, pgcdc.WithAdapter(result.Adapter))
 		}
@@ -853,11 +880,11 @@ func setupAdapters(ctx context.Context, cfg config.Config, cmd *cobra.Command, w
 	// Create plugin adapters.
 	pluginAdapterOpts, pluginAdapterCleanup, paErr := wirePluginAdapters(ctx, wasmRT, cmd, cfg, logger)
 	if paErr != nil {
-		return nil, nil, nil, func() {}, paErr
+		return nil, nil, nil, nil, func() {}, paErr
 	}
 	opts = append(opts, pluginAdapterOpts...)
 
-	return opts, sseBroker, wsBroker, pluginAdapterCleanup, nil
+	return opts, sseBroker, wsBroker, httpMountFns, pluginAdapterCleanup, nil
 }
 
 // setupTransforms builds the complete transform chain from CLI flags, plugins, and YAML config.
@@ -940,11 +967,14 @@ func startSIGHUPHandler(g *errgroup.Group, gCtx context.Context, p *pgcdc.Pipeli
 
 // startHTTPServers registers goroutines in g for the SSE/WS HTTP server (when either broker is active)
 // and the standalone metrics server (when --metrics-addr is set).
-func startHTTPServers(g *errgroup.Group, gCtx context.Context, cfg config.Config, sseBroker *sse.Broker, wsBroker *ws.Broker, checker *health.Checker, readiness *health.ReadinessChecker, insp *inspect.Inspector, logger *slog.Logger) {
-	if sseBroker != nil || wsBroker != nil || insp != nil {
+func startHTTPServers(g *errgroup.Group, gCtx context.Context, cfg config.Config, sseBroker *sse.Broker, wsBroker *ws.Broker, checker *health.Checker, readiness *health.ReadinessChecker, insp *inspect.Inspector, mountFns []func(chi.Router), logger *slog.Logger) {
+	if sseBroker != nil || wsBroker != nil || insp != nil || len(mountFns) > 0 {
 		var serverOpts []server.ServerOption
 		if insp != nil {
 			serverOpts = append(serverOpts, server.WithInspector(insp))
+		}
+		for _, fn := range mountFns {
+			serverOpts = append(serverOpts, server.WithDetectorRoutes(fn))
 		}
 		httpServer := server.New(sseBroker, wsBroker, cfg.SSE.CORSOrigins, cfg.SSE.ReadTimeout, cfg.SSE.IdleTimeout, checker, readiness, serverOpts...)
 		httpServer.Addr = cfg.SSE.Addr

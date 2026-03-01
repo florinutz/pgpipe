@@ -461,6 +461,23 @@ var (
 		Help: "Total number of resume token saves to MongoDB.",
 	})
 
+	// SQLite detector metrics.
+
+	SQLitePolled = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_sqlite_polled_total",
+		Help: "Total number of SQLite poll cycles with results.",
+	})
+
+	SQLiteEventsProcessed = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_sqlite_events_processed_total",
+		Help: "Total number of events processed from SQLite changes table.",
+	})
+
+	SQLiteErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_sqlite_errors_total",
+		Help: "Total number of SQLite detector errors.",
+	})
+
 	// Kafka server adapter metrics.
 
 	KafkaServerConnectionsActive = promauto.NewGauge(prometheus.GaugeOpts{
@@ -612,6 +629,23 @@ var (
 		Help: "Total number of events skipped due to nack window threshold exceeded.",
 	}, []string{"adapter"})
 
+	// Webhook gateway detector metrics.
+
+	WebhookGatewayReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_webhook_gateway_received_total",
+		Help: "Total number of webhook events received by source.",
+	}, []string{"source"})
+
+	WebhookGatewaySignatureFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_webhook_gateway_signature_failures_total",
+		Help: "Total number of webhook signature validation failures.",
+	}, []string{"source"})
+
+	WebhookGatewayErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_webhook_gateway_errors_total",
+		Help: "Total number of webhook gateway processing errors.",
+	}, []string{"source"})
+
 	// Circuit breaker metrics.
 
 	CircuitBreakerState = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -644,6 +678,63 @@ var (
 		Help:    "Duration of adapter startup validation.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"adapter"})
+
+	// GraphQL adapter metrics.
+
+	GraphQLSubscriptionsActive = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_graphql_subscriptions_active",
+		Help: "Number of active GraphQL subscriptions.",
+	})
+
+	GraphQLEventsSent = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_graphql_events_sent_total",
+		Help: "Total number of events sent to GraphQL subscribers.",
+	})
+
+	GraphQLClientsActive = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_graphql_clients_active",
+		Help: "Number of active GraphQL WebSocket connections.",
+	})
+
+	// Arrow Flight adapter metrics.
+
+	ArrowFlightClients = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_arrow_flight_clients_active",
+		Help: "Number of active Arrow Flight DoGet streams.",
+	})
+
+	ArrowFlightRecordsSent = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_arrow_flight_records_sent_total",
+		Help: "Total number of Arrow records sent to Flight clients.",
+	})
+
+	ArrowFlightErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_arrow_flight_errors_total",
+		Help: "Total number of Arrow Flight errors.",
+	})
+
+	// DuckDB adapter metrics.
+
+	DuckDBQueries = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_duckdb_queries_total",
+		Help: "Total number of DuckDB queries executed.",
+	}, []string{"status"})
+
+	DuckDBQueryDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "pgcdc_duckdb_query_duration_seconds",
+		Help:    "Duration of DuckDB query executions.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	DuckDBRows = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_duckdb_rows_total",
+		Help: "Approximate number of rows in DuckDB cdc_events table.",
+	})
+
+	DuckDBFlushes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pgcdc_duckdb_flushes_total",
+		Help: "Total number of DuckDB buffer flush operations.",
+	}, []string{"status"})
 
 	// TOAST cache metrics.
 

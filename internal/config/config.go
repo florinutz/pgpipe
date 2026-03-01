@@ -39,12 +39,17 @@ type Config struct {
 	Encoding            EncodingConfig              `mapstructure:"encoding"`
 	MySQL               MySQLConfig                 `mapstructure:"mysql"`
 	MongoDB             MongoDBConfig               `mapstructure:"mongodb"`
+	SQLite              SQLiteConfig                `mapstructure:"sqlite"`
 	OTel                OTelConfig                  `mapstructure:"otel"`
+	DuckDB              DuckDBConfig                `mapstructure:"duckdb"`
+	Arrow               ArrowConfig                 `mapstructure:"arrow"`
+	GraphQL             GraphQLConfig               `mapstructure:"graphql"`
 	KafkaServer         KafkaServerConfig           `mapstructure:"kafkaserver"`
 	Views               []ViewConfig                `mapstructure:"views"`
 	Middleware          map[string]MiddlewareConfig `mapstructure:"middleware"` // adapter name -> middleware config
 	Inspector           InspectorConfig             `mapstructure:"inspector"`
 	Schema              SchemaConfig                `mapstructure:"schema"`
+	WebhookGateway      WebhookGatewayConfig        `mapstructure:"webhook_gateway"`
 	DetectorMode        string                      `mapstructure:"detector_mode"` // sequential, parallel, or failover (for multi-detector)
 	PipelineName        string                      `mapstructure:"pipeline_name"` // per-pipeline metric label
 }
@@ -259,9 +264,28 @@ func Default() Config {
 			BackoffBase:  5 * time.Second,
 			BackoffCap:   60 * time.Second,
 		},
+		SQLite: SQLiteConfig{
+			PollInterval: 500 * time.Millisecond,
+			BatchSize:    100,
+		},
 		OTel: OTelConfig{
 			Exporter:    "none",
 			SampleRatio: 1.0,
+		},
+		DuckDB: DuckDBConfig{
+			Path:          ":memory:",
+			Retention:     1 * time.Hour,
+			FlushInterval: 5 * time.Second,
+			FlushSize:     1000,
+		},
+		Arrow: ArrowConfig{
+			Addr:       ":8815",
+			BufferSize: 10000,
+		},
+		GraphQL: GraphQLConfig{
+			Path:              "/graphql",
+			BufferSize:        256,
+			KeepaliveInterval: 15 * time.Second,
 		},
 		KafkaServer: KafkaServerConfig{
 			Addr:           ":9092",
@@ -275,6 +299,9 @@ func Default() Config {
 		},
 		Schema: SchemaConfig{
 			Store: "memory",
+		},
+		WebhookGateway: WebhookGatewayConfig{
+			MaxBodySize: 1024 * 1024, // 1MB
 		},
 		Embedding: EmbeddingConfig{
 			Model:       "text-embedding-3-small",
