@@ -67,10 +67,29 @@ type MongoDBConfig struct {
 	BackoffCap   time.Duration `mapstructure:"backoff_cap"`
 }
 
+type SQLiteConfig struct {
+	DBPath        string        `mapstructure:"db_path"`
+	PollInterval  time.Duration `mapstructure:"poll_interval"`
+	BatchSize     int           `mapstructure:"batch_size"`
+	KeepProcessed bool          `mapstructure:"keep_processed"`
+}
+
 type IncrementalSnapshotConfig struct {
 	Enabled     bool          `mapstructure:"enabled"`
 	SignalTable string        `mapstructure:"signal_table"`
 	ChunkSize   int           `mapstructure:"chunk_size"`
 	ChunkDelay  time.Duration `mapstructure:"chunk_delay"`
 	ProgressDB  string        `mapstructure:"progress_db"`
+}
+
+type WebhookGatewayConfig struct {
+	MaxBodySize int64                          `mapstructure:"max_body_size"`
+	Sources     map[string]WebhookSourceConfig `mapstructure:"sources"`
+	CLISources  []string                       `mapstructure:"cli_sources"` // populated from --webhookgw-source CLI flag
+}
+
+type WebhookSourceConfig struct {
+	Secret          string `mapstructure:"secret"`
+	SignatureHeader string `mapstructure:"signature_header"`
+	ChannelPrefix   string `mapstructure:"channel_prefix"`
 }

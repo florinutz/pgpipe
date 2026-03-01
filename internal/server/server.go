@@ -121,6 +121,15 @@ func NewMetricsServer(checker *health.Checker, readiness *health.ReadinessChecke
 // ServerOption configures optional features on the HTTP server.
 type ServerOption func(r chi.Router)
 
+// WithDetectorRoutes mounts detector-provided HTTP routes on the server.
+func WithDetectorRoutes(mountFn func(chi.Router)) ServerOption {
+	return func(r chi.Router) {
+		if mountFn != nil {
+			mountFn(r)
+		}
+	}
+}
+
 // WithInspector mounts inspector HTTP endpoints on the server.
 func WithInspector(insp *inspect.Inspector) ServerOption {
 	return func(r chi.Router) {

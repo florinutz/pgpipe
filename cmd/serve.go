@@ -208,7 +208,6 @@ func registryPipelineBuilder(pcfg server.PipelineConfig, logger *slog.Logger) (*
 
 	// Create adapters via registry.
 	// Each adapter spec's Config map is merged into cfg for the adapter factory.
-	adapterNames := make([]string, 0, len(pcfg.Adapters))
 	for _, aSpec := range pcfg.Adapters {
 		adapterCfg := cfg // copy for per-adapter config overlay
 		if aSpec.Config != nil {
@@ -231,7 +230,6 @@ func registryPipelineBuilder(pcfg server.PipelineConfig, logger *slog.Logger) (*
 		if result.MiddlewareConfig != nil {
 			opts = append(opts, pgcdc.WithMiddlewareConfig(aSpec.Name, *result.MiddlewareConfig))
 		}
-		adapterNames = append(adapterNames, aSpec.Name)
 	}
 
 	// Build transforms from the pipeline spec.

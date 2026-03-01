@@ -249,7 +249,7 @@ func TestMultiDetector_ParallelConcurrency(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		md.Start(context.Background(), events)
+		_ = md.Start(context.Background(), events)
 	}()
 
 	// Both should start within a short window
@@ -306,7 +306,7 @@ func TestMultiDetector_SequentialOrder(t *testing.T) {
 	// Verify strict ordering: events from each detector arrive in the order
 	// that detector was listed, with no interleaving.
 	names := []string{"first", "second", "third"}
-	var children []ChildDetector
+	children := make([]ChildDetector, 0, len(names))
 	for _, name := range names {
 		children = append(children, ChildDetector{
 			Name:     name,
@@ -342,7 +342,7 @@ func TestMultiDetector_SequentialOrder(t *testing.T) {
 func TestMultiDetector_ParallelAllSources(t *testing.T) {
 	// Verify all sources contribute events, sorted for deterministic comparison.
 	names := []string{"alpha", "beta", "gamma"}
-	var children []ChildDetector
+	children := make([]ChildDetector, 0, len(names))
 	for _, name := range names {
 		children = append(children, ChildDetector{
 			Name:     name,

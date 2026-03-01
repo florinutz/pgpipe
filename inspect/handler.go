@@ -26,7 +26,7 @@ func Handler(insp *Inspector) http.HandlerFunc {
 		events := insp.Snapshot(point, limit)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"point":  string(point),
 			"count":  len(events),
 			"events": events,
@@ -66,9 +66,9 @@ func SSEHandler(insp *Inspector) http.HandlerFunc {
 				if !ok {
 					return
 				}
-				w.Write([]byte("data: "))
-				enc.Encode(ev)
-				w.Write([]byte("\n"))
+				_, _ = w.Write([]byte("data: "))
+				_ = enc.Encode(ev)
+				_, _ = w.Write([]byte("\n"))
 				flusher.Flush()
 			}
 		}
