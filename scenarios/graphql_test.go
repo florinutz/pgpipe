@@ -60,6 +60,14 @@ func TestScenario_GraphQL(t *testing.T) {
 			},
 		})
 
+		// Wait until the subscription is registered in the adapter before
+		// inserting. Without this, the subscribe message may still be in
+		// the server's readLoop when the first NOTIFY fires, causing the
+		// broadcast to find zero subscribers and drop the event.
+		waitFor(t, 5*time.Second, func() bool {
+			return adapter.SubscriptionCount() > 0
+		})
+
 		// Insert a row — the retry loop below re-inserts if the detector wasn't ready.
 		insertRow(t, connStr, table, map[string]any{"item": "gql-widget"})
 
@@ -151,6 +159,11 @@ func TestScenario_GraphQL(t *testing.T) {
 				"query":     "subscription { events { channel } }",
 				"variables": map[string]any{"channel": channel1},
 			},
+		})
+
+		// Wait until the subscription is registered before inserting.
+		waitFor(t, 5*time.Second, func() bool {
+			return adapter.SubscriptionCount() > 0
 		})
 
 		// Insert into channel2 (should not match), then channel1 (should match).

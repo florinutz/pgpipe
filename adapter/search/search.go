@@ -107,6 +107,10 @@ func New(
 
 func (a *Adapter) Name() string { return "search" }
 
+// Drain implements adapter.Drainer. The search adapter flushes remaining
+// batched documents in Start() on context cancellation, so Drain is a no-op.
+func (a *Adapter) Drain(_ context.Context) error { return nil }
+
 // Validate checks search engine health endpoint connectivity.
 func (a *Adapter) Validate(ctx context.Context) error {
 	healthURL := strings.TrimRight(a.url, "/") + "/health"

@@ -239,6 +239,9 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 			}
 			metrics.NatsPublished.Inc()
 			metrics.EventsDelivered.WithLabelValues(adapterName).Inc()
+			if !ev.CreatedAt.IsZero() {
+				metrics.EventDeliveryLag.WithLabelValues(adapterName).Observe(time.Since(ev.CreatedAt).Seconds())
+			}
 			if a.ackFn != nil && ev.LSN > 0 {
 				a.ackFn(ev.LSN)
 			}

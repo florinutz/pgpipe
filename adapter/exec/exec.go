@@ -119,6 +119,9 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event, pending **
 			return &pgcdcerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("write pending: %w", err)}
 		}
 		metrics.EventsDelivered.WithLabelValues("exec").Inc()
+		if !(*pending).CreatedAt.IsZero() {
+			metrics.EventDeliveryLag.WithLabelValues("exec").Observe(time.Since((*pending).CreatedAt).Seconds())
+		}
 		*pending = nil
 	}
 
@@ -150,6 +153,9 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event, pending **
 				return &pgcdcerr.ExecProcessError{Command: a.command, Err: fmt.Errorf("write: %w", err)}
 			}
 			metrics.EventsDelivered.WithLabelValues("exec").Inc()
+			if !ev.CreatedAt.IsZero() {
+				metrics.EventDeliveryLag.WithLabelValues("exec").Observe(time.Since(ev.CreatedAt).Seconds())
+			}
 		}
 	}
 }

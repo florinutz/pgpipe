@@ -334,6 +334,9 @@ func (a *Adapter) handleEvent(ctx context.Context, client *kgo.Client, ev event.
 	}
 	metrics.KafkaPublished.Add(1)
 	metrics.EventsDelivered.WithLabelValues(adapterName).Inc()
+	if !ev.CreatedAt.IsZero() {
+		metrics.EventDeliveryLag.WithLabelValues(adapterName).Observe(time.Since(ev.CreatedAt).Seconds())
+	}
 	if a.transactional {
 		metrics.KafkaTransactions.Add(1)
 	}

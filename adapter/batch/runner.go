@@ -127,6 +127,20 @@ func (r *Runner) flushBatch(ctx context.Context, batch []event.Event) {
 
 	metrics.BatchFlushes.WithLabelValues(r.name, "ok").Inc()
 
+	// Observe delivery lag for successfully delivered events.
+	failedSet := make(map[string]struct{}, len(result.Failed))
+	for _, fe := range result.Failed {
+		failedSet[fe.Event.ID] = struct{}{}
+	}
+	for _, ev := range batch {
+		if _, failed := failedSet[ev.ID]; failed {
+			continue
+		}
+		if !ev.CreatedAt.IsZero() {
+			metrics.EventDeliveryLag.WithLabelValues(r.name).Observe(time.Since(ev.CreatedAt).Seconds())
+		}
+	}
+
 	// DLQ individual failures.
 	if r.dlq != nil {
 		for _, fe := range result.Failed {

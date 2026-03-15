@@ -52,6 +52,10 @@ func New(addr string, logger *slog.Logger) *Adapter {
 
 func (a *Adapter) Name() string { return "grpc" }
 
+// Drain implements adapter.Drainer. The gRPC adapter performs graceful
+// shutdown (GracefulStop) in Start() on context cancellation, so Drain is a no-op.
+func (a *Adapter) Drain(_ context.Context) error { return nil }
+
 // Validate checks that the listen address is a valid host:port.
 func (a *Adapter) Validate(_ context.Context) error {
 	if _, _, err := net.SplitHostPort(a.addr); err != nil {

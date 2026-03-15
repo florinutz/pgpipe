@@ -204,6 +204,9 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 			}
 
 			metrics.EventsDelivered.WithLabelValues("redis").Inc()
+			if !ev.CreatedAt.IsZero() {
+				metrics.EventDeliveryLag.WithLabelValues("redis").Observe(time.Since(ev.CreatedAt).Seconds())
+			}
 		}
 	}
 }

@@ -62,6 +62,10 @@ func (a *Adapter) Name() string {
 	return "graphql"
 }
 
+// Drain implements adapter.Drainer. The GraphQL adapter closes all
+// subscriptions in Start() on context cancellation, so Drain is a no-op.
+func (a *Adapter) Drain(_ context.Context) error { return nil }
+
 // Start reads events from the channel and broadcasts to matching subscriptions.
 func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 	a.logger.Info("graphql adapter started", "path", a.path)
@@ -152,6 +156,14 @@ func (a *Adapter) removeClient(c *client) {
 		}
 	}
 	delete(a.clients, c)
+}
+
+// SubscriptionCount returns the number of active subscriptions.
+// Useful for tests that need to wait until a subscription is registered.
+func (a *Adapter) SubscriptionCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.subs)
 }
 
 // closeAllSubscriptions closes all subscription channels on shutdown.

@@ -91,6 +91,10 @@ func New(addr string, bufferSize int, schemaStore schema.Store, logger *slog.Log
 
 func (a *Adapter) Name() string { return "arrow" }
 
+// Drain implements adapter.Drainer. The Arrow Flight adapter shuts down
+// the gRPC server in Start() on context cancellation, so Drain is a no-op.
+func (a *Adapter) Drain(_ context.Context) error { return nil }
+
 // Start consumes events from the bus and serves them via Arrow Flight.
 // Blocks until ctx is cancelled.
 func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
