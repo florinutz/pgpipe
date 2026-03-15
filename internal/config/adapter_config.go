@@ -201,26 +201,19 @@ type ClickHouseConfig struct {
 	BackoffCap    time.Duration     `mapstructure:"backoff_cap"`
 }
 
-type MiddlewareConfig struct {
-	Retry          *MiddlewareRetryConfig          `mapstructure:"retry"`
-	CircuitBreaker *MiddlewareCircuitBreakerConfig `mapstructure:"circuit_breaker"`
-	RateLimit      *MiddlewareRateLimitConfig      `mapstructure:"rate_limit"`
+type ChainConfig struct {
+	Terminal   string `mapstructure:"terminal"`
+	Compress   bool   `mapstructure:"compress"`
+	EncryptKey string `mapstructure:"encrypt_key"`
+	BatchSize  int    `mapstructure:"batch_size"`
 }
 
-type MiddlewareRetryConfig struct {
-	MaxRetries  int           `mapstructure:"max_retries"`
-	BackoffBase time.Duration `mapstructure:"backoff_base"`
-	BackoffCap  time.Duration `mapstructure:"backoff_cap"`
-}
-
-type MiddlewareCircuitBreakerConfig struct {
-	MaxFailures  int           `mapstructure:"max_failures"`
-	ResetTimeout time.Duration `mapstructure:"reset_timeout"`
-}
-
-type MiddlewareRateLimitConfig struct {
-	EventsPerSecond float64 `mapstructure:"events_per_second"`
-	Burst           int     `mapstructure:"burst"`
+type PGWireConfig struct {
+	Addr       string `mapstructure:"addr"`
+	BufferSize int    `mapstructure:"buffer_size"`
+	Password   string `mapstructure:"password"`
+	TLSCert    string `mapstructure:"tls_cert"`
+	TLSKey     string `mapstructure:"tls_key"`
 }
 
 type EncodingConfig struct {

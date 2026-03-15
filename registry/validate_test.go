@@ -352,6 +352,98 @@ func TestValidateConfig_Integration(t *testing.T) {
 	}
 }
 
+func TestAdapterDefaultConfig(t *testing.T) {
+	// Register a test adapter with DefaultConfig.
+	RegisterAdapter(AdapterEntry{
+		Name:        "test-default-cfg",
+		Description: "test",
+		ConfigKey:   "test_cfg",
+		DefaultConfig: func() any {
+			return &config.WebhookConfig{
+				MaxRetries: 10,
+				Timeout:    5 * time.Second,
+			}
+		},
+	})
+	defer func() {
+		mu.Lock()
+		delete(adapters, "test-default-cfg")
+		mu.Unlock()
+	}()
+
+	// Should return a fresh config.
+	got := AdapterDefaultConfig("test-default-cfg")
+	if got == nil {
+		t.Fatal("expected non-nil config")
+	}
+	wh, ok := got.(*config.WebhookConfig)
+	if !ok {
+		t.Fatalf("expected *WebhookConfig, got %T", got)
+	}
+	if wh.MaxRetries != 10 {
+		t.Errorf("expected MaxRetries=10, got %d", wh.MaxRetries)
+	}
+	if wh.Timeout != 5*time.Second {
+		t.Errorf("expected Timeout=5s, got %v", wh.Timeout)
+	}
+
+	// Unknown adapter returns nil.
+	if got := AdapterDefaultConfig("nonexistent"); got != nil {
+		t.Errorf("expected nil for unknown adapter, got %v", got)
+	}
+
+	// Adapter without DefaultConfig returns nil.
+	RegisterAdapter(AdapterEntry{
+		Name:        "test-no-default",
+		Description: "test",
+	})
+	defer func() {
+		mu.Lock()
+		delete(adapters, "test-no-default")
+		mu.Unlock()
+	}()
+	if got := AdapterDefaultConfig("test-no-default"); got != nil {
+		t.Errorf("expected nil for adapter without DefaultConfig, got %v", got)
+	}
+}
+
+func TestDetectorDefaultConfig(t *testing.T) {
+	// Register a test detector with DefaultConfig.
+	RegisterDetector(DetectorEntry{
+		Name:        "test-det-cfg",
+		Description: "test",
+		ConfigKey:   "test_det",
+		DefaultConfig: func() any {
+			return &config.MySQLConfig{
+				Flavor:      "mysql",
+				BackoffBase: 5 * time.Second,
+			}
+		},
+	})
+	defer func() {
+		mu.Lock()
+		delete(detectors, "test-det-cfg")
+		mu.Unlock()
+	}()
+
+	got := DetectorDefaultConfig("test-det-cfg")
+	if got == nil {
+		t.Fatal("expected non-nil config")
+	}
+	my, ok := got.(*config.MySQLConfig)
+	if !ok {
+		t.Fatalf("expected *MySQLConfig, got %T", got)
+	}
+	if my.Flavor != "mysql" {
+		t.Errorf("expected Flavor=mysql, got %q", my.Flavor)
+	}
+
+	// Unknown returns nil.
+	if got := DetectorDefaultConfig("nonexistent"); got != nil {
+		t.Errorf("expected nil for unknown detector, got %v", got)
+	}
+}
+
 func TestValidateConfig_SkipsInactiveAdapters(t *testing.T) {
 	RegisterAdapter(AdapterEntry{
 		Name:        "test-inactive",

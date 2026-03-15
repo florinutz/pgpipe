@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	mongodbdetector "github.com/florinutz/pgcdc/detector/mongodb"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +13,16 @@ func init() {
 	registry.RegisterDetector(registry.DetectorEntry{
 		Name:        "mongodb",
 		Description: "MongoDB Change Streams",
+		ConfigKey:   "mongodb",
+		DefaultConfig: func() any {
+			return &config.MongoDBConfig{
+				Scope:        "collection",
+				FullDocument: "updateLookup",
+				MetadataColl: "pgcdc_resume_tokens",
+				BackoffBase:  5 * time.Second,
+				BackoffCap:   60 * time.Second,
+			}
+		},
 		ViperKeys: [][2]string{
 			{"mongodb-uri", "mongodb.uri"},
 			{"mongodb-scope", "mongodb.scope"},

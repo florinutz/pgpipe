@@ -45,7 +45,7 @@ type Adapter struct {
 	nc            *natsclient.Conn
 }
 
-// SetTracer implements adapter.Traceable.
+// SetTracer sets the OpenTelemetry tracer for per-event spans.
 func (a *Adapter) SetTracer(t trace.Tracer) { a.tracer = t }
 
 // SetAckFunc implements adapter.Acknowledger.

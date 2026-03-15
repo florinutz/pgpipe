@@ -40,6 +40,8 @@ builds:
       - no_arrow
       - no_duckdb
       - no_sqlite
+      - no_clickhouse
+      - no_pgwire
     ldflags:
       - -s -w -X github.com/florinutz/pgcdc/cmd.Version={{.Version}}-slim -X github.com/florinutz/pgcdc/cmd.Commit={{.ShortCommit}} -X github.com/florinutz/pgcdc/cmd.BuildDate={{.Date}}
 

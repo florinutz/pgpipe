@@ -46,12 +46,14 @@ type AdapterResult struct {
 
 // AdapterEntry describes a registered adapter.
 type AdapterEntry struct {
-	Name        string
-	Description string
-	Create      func(ctx AdapterContext) (AdapterResult, error)
-	BindFlags   func(f *pflag.FlagSet)
-	ViperKeys   [][2]string // flag-name → viper-key pairs for PreRunE binding
-	Spec        []ParamSpec // typed parameter specifications for describe/validation
+	Name          string
+	Description   string
+	Create        func(ctx AdapterContext) (AdapterResult, error)
+	BindFlags     func(f *pflag.FlagSet)
+	ViperKeys     [][2]string // flag-name → viper-key pairs for PreRunE binding
+	Spec          []ParamSpec // typed parameter specifications for describe/validation
+	DefaultConfig func() any  // returns typed default config; nil = adapter has no dedicated config struct
+	ConfigKey     string      // viper key prefix (e.g. "webhook", "kafka"); empty = no dedicated config
 }
 
 // DetectorContext carries shared resources for detector factories.
@@ -72,12 +74,14 @@ type DetectorResult struct {
 
 // DetectorEntry describes a registered detector.
 type DetectorEntry struct {
-	Name        string
-	Description string
-	Create      func(ctx DetectorContext) (DetectorResult, error)
-	BindFlags   func(f *pflag.FlagSet)
-	ViperKeys   [][2]string // flag-name → viper-key pairs for validation
-	Spec        []ParamSpec // typed parameter specifications for describe/validation
+	Name          string
+	Description   string
+	Create        func(ctx DetectorContext) (DetectorResult, error)
+	BindFlags     func(f *pflag.FlagSet)
+	ViperKeys     [][2]string // flag-name → viper-key pairs for validation
+	Spec          []ParamSpec // typed parameter specifications for describe/validation
+	DefaultConfig func() any  // returns typed default config; nil = detector has no dedicated config struct
+	ConfigKey     string      // viper key prefix (e.g. "mysql", "mongodb"); empty = no dedicated config
 }
 
 // TransformEntry describes a registered transform type.
@@ -248,6 +252,26 @@ func BindAdapterViperKeys(f *pflag.FlagSet, bindFn func(*pflag.FlagSet, [][2]str
 		}
 	}
 	return nil
+}
+
+// AdapterDefaultConfig returns a fresh default config for the named adapter,
+// or nil if the adapter is unknown or has no dedicated config struct.
+func AdapterDefaultConfig(name string) any {
+	e, ok := GetAdapter(name)
+	if !ok || e.DefaultConfig == nil {
+		return nil
+	}
+	return e.DefaultConfig()
+}
+
+// DetectorDefaultConfig returns a fresh default config for the named detector,
+// or nil if the detector is unknown or has no dedicated config struct.
+func DetectorDefaultConfig(name string) any {
+	e, ok := GetDetector(name)
+	if !ok || e.DefaultConfig == nil {
+		return nil
+	}
+	return e.DefaultConfig()
 }
 
 // SpecToTransform converts a config TransformSpec using registered transform factories.

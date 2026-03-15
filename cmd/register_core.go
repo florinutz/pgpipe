@@ -13,6 +13,7 @@ import (
 	"github.com/florinutz/pgcdc/adapter/stdout"
 	"github.com/florinutz/pgcdc/adapter/webhook"
 	"github.com/florinutz/pgcdc/adapter/ws"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -38,6 +39,16 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "webhook",
 		Description: "HTTP POST to a webhook URL",
+		ConfigKey:   "webhook",
+		DefaultConfig: func() any {
+			return &config.WebhookConfig{
+				MaxRetries:  5,
+				Headers:     map[string]string{},
+				Timeout:     10 * time.Second,
+				BackoffBase: 1 * time.Second,
+				BackoffCap:  32 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			a := webhook.New(
@@ -104,6 +115,16 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "sse",
 		Description: "Server-Sent Events broker",
+		ConfigKey:   "sse",
+		DefaultConfig: func() any {
+			return &config.SSEConfig{
+				Addr:              ":8080",
+				CORSOrigins:       []string{"*"},
+				HeartbeatInterval: 15 * time.Second,
+				ReadTimeout:       5 * time.Second,
+				IdleTimeout:       120 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			broker := sse.New(cfg.Bus.BufferSize, cfg.SSE.HeartbeatInterval, ctx.Logger)
@@ -120,6 +141,13 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "file",
 		Description: "JSON-lines to file with rotation",
+		ConfigKey:   "file",
+		DefaultConfig: func() any {
+			return &config.FileConfig{
+				MaxSize:  100 * 1024 * 1024,
+				MaxFiles: 5,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{
@@ -136,6 +164,13 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "exec",
 		Description: "JSON-lines to subprocess stdin",
+		ConfigKey:   "exec",
+		DefaultConfig: func() any {
+			return &config.ExecConfig{
+				BackoffBase: 1 * time.Second,
+				BackoffCap:  30 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{
@@ -150,6 +185,14 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "pg_table",
 		Description: "INSERT into PostgreSQL table",
+		ConfigKey:   "pg_table",
+		DefaultConfig: func() any {
+			return &config.PGTableConfig{
+				Table:       "pgcdc_events",
+				BackoffBase: 1 * time.Second,
+				BackoffCap:  30 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			pgTableURL := cfg.PGTable.URL
@@ -169,6 +212,12 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "ws",
 		Description: "WebSocket broker",
+		ConfigKey:   "websocket",
+		DefaultConfig: func() any {
+			return &config.WebSocketConfig{
+				PingInterval: 15 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			broker := ws.New(cfg.Bus.BufferSize, cfg.WebSocket.PingInterval, ctx.Logger)
@@ -185,6 +234,19 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "embedding",
 		Description: "Embed text columns into pgvector table",
+		ConfigKey:   "embedding",
+		DefaultConfig: func() any {
+			return &config.EmbeddingConfig{
+				Model:       "text-embedding-3-small",
+				IDColumn:    "id",
+				Table:       "pgcdc_embeddings",
+				Dimension:   1536,
+				MaxRetries:  3,
+				Timeout:     30 * time.Second,
+				BackoffBase: 2 * time.Second,
+				BackoffCap:  60 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			embDBURL := cfg.Embedding.DBURL
@@ -235,6 +297,17 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "search",
 		Description: "Typesense / Meilisearch sync",
+		ConfigKey:   "search",
+		DefaultConfig: func() any {
+			return &config.SearchConfig{
+				Engine:        "typesense",
+				IDColumn:      "id",
+				BatchSize:     100,
+				BatchInterval: 1 * time.Second,
+				BackoffBase:   1 * time.Second,
+				BackoffCap:    30 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

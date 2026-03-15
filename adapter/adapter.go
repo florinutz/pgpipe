@@ -4,10 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/florinutz/pgcdc/dlq"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/go-chi/chi/v5"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type Adapter interface {
@@ -31,16 +29,11 @@ type Deliverer interface {
 type AckFunc func(lsn uint64)
 
 // Acknowledger is implemented by adapters that support cooperative
-// checkpointing. Following the DLQAware pattern, the pipeline injects an
-// AckFunc via SetAckFunc when cooperative checkpointing is enabled.
+// checkpointing. The pipeline injects an AckFunc via SetAckFunc when
+// cooperative checkpointing is enabled. Advanced — only needed when adapters
+// must control exactly when WAL positions are acknowledged.
 type Acknowledger interface {
 	SetAckFunc(fn AckFunc)
-}
-
-// Traceable is implemented by adapters that support OpenTelemetry tracing.
-// The pipeline injects a tracer when tracing is enabled.
-type Traceable interface {
-	SetTracer(t trace.Tracer)
 }
 
 // Validator is implemented by adapters that can verify their external
@@ -58,23 +51,10 @@ type Drainer interface {
 	Drain(ctx context.Context) error
 }
 
-// Reinjector is implemented by adapters that produce events back into the bus
-// (e.g. the view adapter emits VIEW_RESULT events). The pipeline injects the
-// bus ingest channel before starting adapters.
-type Reinjector interface {
-	SetIngestChan(ch chan<- event.Event)
-}
-
 // HTTPMountable is optionally implemented by adapters that serve HTTP routes
 // (e.g., graphql, duckdb). The pipeline mounts their routes on the shared HTTP server.
 type HTTPMountable interface {
 	MountHTTP(r chi.Router)
-}
-
-// DLQAware is implemented by adapters that can record failed events to a DLQ.
-// The pipeline injects a DLQ via SetDLQ when a DLQ backend is configured.
-type DLQAware interface {
-	SetDLQ(d dlq.DLQ)
 }
 
 // Batcher is implemented by adapters that accumulate events and flush them

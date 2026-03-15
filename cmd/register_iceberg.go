@@ -3,7 +3,10 @@
 package cmd
 
 import (
+	"time"
+
 	icebergadapter "github.com/florinutz/pgcdc/adapter/iceberg"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +14,19 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "iceberg",
 		Description: "Apache Iceberg table writes (Hadoop catalog, Parquet)",
+		ConfigKey:   "iceberg",
+		DefaultConfig: func() any {
+			return &config.IcebergConfig{
+				CatalogType:   "hadoop",
+				Namespace:     "pgcdc",
+				Mode:          "append",
+				SchemaMode:    "raw",
+				FlushInterval: 1 * time.Minute,
+				FlushSize:     10000,
+				BackoffBase:   5 * time.Second,
+				BackoffCap:    60 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

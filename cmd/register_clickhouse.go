@@ -4,8 +4,10 @@ package cmd
 
 import (
 	"strings"
+	"time"
 
 	clickhouseadapter "github.com/florinutz/pgcdc/adapter/clickhouse"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -13,6 +15,16 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "clickhouse",
 		Description: "ClickHouse analytics database (batch INSERT via native protocol)",
+		ConfigKey:   "clickhouse",
+		DefaultConfig: func() any {
+			return &config.ClickHouseConfig{
+				Table:         "pgcdc_events",
+				BatchSize:     10000,
+				FlushInterval: 1 * time.Second,
+				BackoffBase:   5 * time.Second,
+				BackoffCap:    60 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			// Merge CLI --clickhouse-setting flags into config settings map.

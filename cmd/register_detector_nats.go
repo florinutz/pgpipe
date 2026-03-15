@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	natsdetector "github.com/florinutz/pgcdc/detector/nats"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -13,6 +14,13 @@ func init() {
 	registry.RegisterDetector(registry.DetectorEntry{
 		Name:        "nats_consumer",
 		Description: "NATS JetStream consumer",
+		ConfigKey:   "nats_consumer",
+		DefaultConfig: func() any {
+			return &config.NatsConsumerConfig{
+				Stream:  "pgcdc",
+				Durable: "pgcdc",
+			}
+		},
 		ViperKeys: [][2]string{
 			{"nats-consumer-stream", "nats_consumer.stream"},
 			{"nats-consumer-subjects", "nats_consumer.subjects"},

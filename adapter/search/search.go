@@ -51,7 +51,7 @@ type Adapter struct {
 	tracer        trace.Tracer
 }
 
-// SetTracer implements adapter.Traceable.
+// SetTracer sets the OpenTelemetry tracer for per-event spans.
 func (a *Adapter) SetTracer(t trace.Tracer) { a.tracer = t }
 
 // SetDLQ sets the dead letter queue for failed deliveries.

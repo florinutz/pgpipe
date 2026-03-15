@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	kafkadetector "github.com/florinutz/pgcdc/detector/kafka"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -13,6 +14,13 @@ func init() {
 	registry.RegisterDetector(registry.DetectorEntry{
 		Name:        "kafka_consumer",
 		Description: "Kafka topic consumer (consumer group)",
+		ConfigKey:   "kafka_consumer",
+		DefaultConfig: func() any {
+			return &config.KafkaConsumerConfig{
+				Group:  "pgcdc",
+				Offset: "earliest",
+			}
+		},
 		ViperKeys: [][2]string{
 			{"kafka-consumer-topics", "kafka_consumer.topics"},
 			{"kafka-consumer-group", "kafka_consumer.group"},

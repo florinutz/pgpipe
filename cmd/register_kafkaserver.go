@@ -8,6 +8,7 @@ import (
 
 	kafkaserveradapter "github.com/florinutz/pgcdc/adapter/kafkaserver"
 	"github.com/florinutz/pgcdc/checkpoint"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -15,6 +16,16 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "kafkaserver",
 		Description: "Kafka wire protocol server (no Kafka cluster needed)",
+		ConfigKey:   "kafkaserver",
+		DefaultConfig: func() any {
+			return &config.KafkaServerConfig{
+				Addr:           ":9092",
+				PartitionCount: 8,
+				BufferSize:     10000,
+				SessionTimeout: 30 * time.Second,
+				KeyColumn:      "id",
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 

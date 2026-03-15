@@ -91,17 +91,16 @@ make test-all
 
 ## Adding a New Adapter
 
-1. **Implement the `adapter.Adapter` interface** (`Start(ctx, <-chan event.Event) error`, `Name() string`).
+1. **Implement the `adapter.Adapter` interface** (`Start(ctx, <-chan event.Event) error`, `Name() string`) or `adapter.Deliverer` (`Deliver(ctx, event.Event) error`) for middleware-chain support (CB, rate-limit, retry, DLQ, tracing).
 2. **Optionally implement**:
-   - `adapter.Acknowledger` (`SetAckFunc(fn AckFunc)`) for cooperative checkpointing.
+   - `adapter.Acknowledger` (`SetAckFunc(fn AckFunc)`) for cooperative checkpointing (advanced).
    - `adapter.Validator` (`Validate(ctx) error`) for startup pre-flight checks.
    - `adapter.Drainer` (`Drain(ctx) error`) for graceful shutdown flush.
-   - `adapter.Traceable` (`SetTracer(t trace.Tracer)`) for OpenTelemetry tracing.
-   - `adapter.Reinjector` (`SetIngestChan(ch chan<- event.Event)`) for bus re-injection.
+   - `adapter.HTTPMountable` (`MountHTTP(r chi.Router)`) if the adapter serves HTTP routes.
 3. **Create package** `adapter/<name>/`.
-4. **Add switch case** in `cmd/listen.go` adapter loop.
-5. **Add config struct** in `internal/config/config.go`.
-6. **Add CLI flags** in `cmd/listen.go` `init()`.
+4. **Create `cmd/register_<name>.go`** and register via `registry.RegisterAdapter(registry.AdapterEntry{...})` in `init()`, including `BindFlags`, `ViperKeys`, `DefaultConfig`, and `ConfigKey`.
+5. **Add config struct** in `internal/config/adapter_config.go`.
+6. **Add defaults** in `Default()` in `internal/config/config.go`.
 7. **Add metrics** instrumentation: `metrics.EventsDelivered.WithLabelValues("<name>").Inc()`.
 8. **Add scenario test**, register in `SCENARIOS.md`.
 
@@ -111,8 +110,9 @@ make test-all
 2. **Create package** `detector/<name>/`.
 3. **Must NOT close** the events channel (the bus owns its lifecycle).
 4. **Use `pgx.Connect`** (not pool) for PostgreSQL detectors -- LISTEN requires a dedicated connection.
-5. **Add selection logic** in `cmd/listen.go`.
-6. **Health checker registration** is handled by the pipeline (`pgcdc.go`) — no manual `checker.Register` call needed.
+5. **Create `cmd/register_detector_<name>.go`** and register via `registry.RegisterDetector(registry.DetectorEntry{...})` in `init()`.
+6. **Add config struct** in `internal/config/detector_config.go` and defaults in `Default()`.
+7. **Health checker registration** is handled by the pipeline (`pgcdc.go`) — no manual `checker.Register` call needed.
 7. **Add scenario test**, register in `SCENARIOS.md`.
 
 ## Adding a CLI Command

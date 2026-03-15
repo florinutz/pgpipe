@@ -3,7 +3,10 @@
 package cmd
 
 import (
+	"time"
+
 	kafkaadapter "github.com/florinutz/pgcdc/adapter/kafka"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +14,14 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "kafka",
 		Description: "Kafka topic publish",
+		ConfigKey:   "kafka",
+		DefaultConfig: func() any {
+			return &config.KafkaConfig{
+				Brokers:     []string{"localhost:9092"},
+				BackoffBase: 1 * time.Second,
+				BackoffCap:  30 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

@@ -4,6 +4,7 @@ package cmd
 
 import (
 	arrowadapter "github.com/florinutz/pgcdc/adapter/arrow"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +12,13 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "arrow",
 		Description: "Apache Arrow Flight gRPC server for analytical queries",
+		ConfigKey:   "arrow",
+		DefaultConfig: func() any {
+			return &config.ArrowConfig{
+				Addr:       ":8815",
+				BufferSize: 10000,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

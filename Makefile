@@ -3,7 +3,7 @@ LDFLAGS := -s -w -X github.com/florinutz/pgcdc/cmd.Version=$(VERSION)
 
 .PHONY: build build-slim build-slim-stripped size test test-scenarios test-scenarios-fast test-scenarios-docker test-all lint vet fmt bench bench-unit bench-compare bench-save bench-debezium fuzz coverage coverage-gate test-smoke docker-build docker-up docker-down clean help
 
-SLIM_TAGS := no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins,no_views
+SLIM_TAGS := no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins,no_kafkaserver,no_views,no_s3,no_graphql,no_arrow,no_duckdb,no_sqlite,no_clickhouse,no_pgwire
 
 ## build: Compile the binary
 build:

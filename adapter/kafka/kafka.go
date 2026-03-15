@@ -60,10 +60,10 @@ type Adapter struct {
 	topicCache    map[string]string
 }
 
-// SetTracer implements adapter.Traceable.
+// SetTracer sets the OpenTelemetry tracer for per-event spans.
 func (a *Adapter) SetTracer(t trace.Tracer) { a.tracer = t }
 
-// SetDLQ implements adapter.DLQAware.
+// SetDLQ sets the dead letter queue for failed deliveries.
 func (a *Adapter) SetDLQ(d dlq.DLQ) { a.dlqInstance = d }
 
 // SetAckFunc implements adapter.Acknowledger.

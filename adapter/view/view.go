@@ -36,7 +36,7 @@ func New(engine *viewpkg.Engine, logger *slog.Logger) *Adapter {
 // Name returns the adapter name.
 func (a *Adapter) Name() string { return "view" }
 
-// SetIngestChan implements adapter.Reinjector.
+// SetIngestChan sets the bus ingest channel for re-injecting VIEW_RESULT events.
 func (a *Adapter) SetIngestChan(ch chan<- event.Event) {
 	a.ingestCh = ch
 }

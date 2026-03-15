@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	mysqldetector "github.com/florinutz/pgcdc/detector/mysql"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +13,15 @@ func init() {
 	registry.RegisterDetector(registry.DetectorEntry{
 		Name:        "mysql",
 		Description: "MySQL binlog replication",
+		ConfigKey:   "mysql",
+		DefaultConfig: func() any {
+			return &config.MySQLConfig{
+				Flavor:       "mysql",
+				BinlogPrefix: "mysql-bin",
+				BackoffBase:  5 * time.Second,
+				BackoffCap:   60 * time.Second,
+			}
+		},
 		ViperKeys: [][2]string{
 			{"mysql-addr", "mysql.addr"},
 			{"mysql-user", "mysql.user"},

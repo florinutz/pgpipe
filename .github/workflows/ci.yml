@@ -80,4 +80,4 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build slim binary
-        run: go build -tags "no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins,no_kafkaserver,no_views,no_s3,no_graphql,no_arrow,no_duckdb,no_sqlite" -o /dev/null ./cmd/pgcdc
+        run: go build -tags "no_kafka,no_grpc,no_iceberg,no_nats,no_redis,no_plugins,no_kafkaserver,no_views,no_s3,no_graphql,no_arrow,no_duckdb,no_sqlite,no_clickhouse,no_pgwire" -o /dev/null ./cmd/pgcdc

@@ -3,60 +3,61 @@ package config
 import "time"
 
 type Config struct {
-	DatabaseURL         string                      `mapstructure:"database_url"`
-	Channels            []string                    `mapstructure:"channels"`
-	Adapters            []string                    `mapstructure:"adapters"`
-	LogLevel            string                      `mapstructure:"log_level"`
-	LogFormat           string                      `mapstructure:"log_format"`
-	ShutdownTimeout     time.Duration               `mapstructure:"shutdown_timeout"`
-	MetricsAddr         string                      `mapstructure:"metrics_addr"`
-	MetricsTLSCertFile  string                      `mapstructure:"metrics_tls_cert_file"`
-	MetricsTLSKeyFile   string                      `mapstructure:"metrics_tls_key_file"`
-	SkipValidation      bool                        `mapstructure:"skip_validation"`
-	SkipMigrations      bool                        `mapstructure:"skip_migrations"`
-	Bus                 BusConfig                   `mapstructure:"bus"`
-	Webhook             WebhookConfig               `mapstructure:"webhook"`
-	SSE                 SSEConfig                   `mapstructure:"sse"`
-	File                FileConfig                  `mapstructure:"file"`
-	Exec                ExecConfig                  `mapstructure:"exec"`
-	PGTable             PGTableConfig               `mapstructure:"pg_table"`
-	WebSocket           WebSocketConfig             `mapstructure:"websocket"`
-	Detector            DetectorConfig              `mapstructure:"detector"`
-	Snapshot            SnapshotConfig              `mapstructure:"snapshot"`
-	Embedding           EmbeddingConfig             `mapstructure:"embedding"`
-	Iceberg             IcebergConfig               `mapstructure:"iceberg"`
-	Nats                NatsConfig                  `mapstructure:"nats"`
-	NatsConsumer        NatsConsumerConfig          `mapstructure:"nats_consumer"`
-	Outbox              OutboxConfig                `mapstructure:"outbox"`
-	DLQ                 DLQConfig                   `mapstructure:"dlq"`
-	Search              SearchConfig                `mapstructure:"search"`
-	Redis               RedisConfig                 `mapstructure:"redis"`
-	GRPC                GRPCConfig                  `mapstructure:"grpc"`
-	Kafka               KafkaConfig                 `mapstructure:"kafka"`
-	S3                  S3Config                    `mapstructure:"s3"`
-	IncrementalSnapshot IncrementalSnapshotConfig   `mapstructure:"incremental_snapshot"`
-	Transforms          TransformConfig             `mapstructure:"transforms"`
-	Routes              map[string][]string         `mapstructure:"routes"` // adapter -> channels
-	Backpressure        BackpressureConfig          `mapstructure:"backpressure"`
-	Plugins             PluginConfig                `mapstructure:"plugins"`
-	Encoding            EncodingConfig              `mapstructure:"encoding"`
-	MySQL               MySQLConfig                 `mapstructure:"mysql"`
-	MongoDB             MongoDBConfig               `mapstructure:"mongodb"`
-	SQLite              SQLiteConfig                `mapstructure:"sqlite"`
-	OTel                OTelConfig                  `mapstructure:"otel"`
-	DuckDB              DuckDBConfig                `mapstructure:"duckdb"`
-	Arrow               ArrowConfig                 `mapstructure:"arrow"`
-	GraphQL             GraphQLConfig               `mapstructure:"graphql"`
-	KafkaServer         KafkaServerConfig           `mapstructure:"kafkaserver"`
-	Views               []ViewConfig                `mapstructure:"views"`
-	ClickHouse          ClickHouseConfig            `mapstructure:"clickhouse"`
-	Middleware          map[string]MiddlewareConfig `mapstructure:"middleware"` // adapter name -> middleware config
-	Inspector           InspectorConfig             `mapstructure:"inspector"`
-	Schema              SchemaConfig                `mapstructure:"schema"`
-	KafkaConsumer       KafkaConsumerConfig         `mapstructure:"kafka_consumer"`
-	WebhookGateway      WebhookGatewayConfig        `mapstructure:"webhook_gateway"`
-	DetectorMode        string                      `mapstructure:"detector_mode"` // sequential, parallel, or failover (for multi-detector)
-	PipelineName        string                      `mapstructure:"pipeline_name"` // per-pipeline metric label
+	DatabaseURL         string                    `mapstructure:"database_url"`
+	Channels            []string                  `mapstructure:"channels"`
+	Adapters            []string                  `mapstructure:"adapters"`
+	LogLevel            string                    `mapstructure:"log_level"`
+	LogFormat           string                    `mapstructure:"log_format"`
+	ShutdownTimeout     time.Duration             `mapstructure:"shutdown_timeout"`
+	MetricsAddr         string                    `mapstructure:"metrics_addr"`
+	MetricsTLSCertFile  string                    `mapstructure:"metrics_tls_cert_file"`
+	MetricsTLSKeyFile   string                    `mapstructure:"metrics_tls_key_file"`
+	SkipValidation      bool                      `mapstructure:"skip_validation"`
+	SkipMigrations      bool                      `mapstructure:"skip_migrations"`
+	Bus                 BusConfig                 `mapstructure:"bus"`
+	Webhook             WebhookConfig             `mapstructure:"webhook"`
+	SSE                 SSEConfig                 `mapstructure:"sse"`
+	File                FileConfig                `mapstructure:"file"`
+	Exec                ExecConfig                `mapstructure:"exec"`
+	PGTable             PGTableConfig             `mapstructure:"pg_table"`
+	WebSocket           WebSocketConfig           `mapstructure:"websocket"`
+	Detector            DetectorConfig            `mapstructure:"detector"`
+	Snapshot            SnapshotConfig            `mapstructure:"snapshot"`
+	Embedding           EmbeddingConfig           `mapstructure:"embedding"`
+	Iceberg             IcebergConfig             `mapstructure:"iceberg"`
+	Nats                NatsConfig                `mapstructure:"nats"`
+	NatsConsumer        NatsConsumerConfig        `mapstructure:"nats_consumer"`
+	Outbox              OutboxConfig              `mapstructure:"outbox"`
+	DLQ                 DLQConfig                 `mapstructure:"dlq"`
+	Search              SearchConfig              `mapstructure:"search"`
+	Redis               RedisConfig               `mapstructure:"redis"`
+	GRPC                GRPCConfig                `mapstructure:"grpc"`
+	Kafka               KafkaConfig               `mapstructure:"kafka"`
+	S3                  S3Config                  `mapstructure:"s3"`
+	IncrementalSnapshot IncrementalSnapshotConfig `mapstructure:"incremental_snapshot"`
+	Transforms          TransformConfig           `mapstructure:"transforms"`
+	Routes              map[string][]string       `mapstructure:"routes"` // adapter -> channels
+	Backpressure        BackpressureConfig        `mapstructure:"backpressure"`
+	Plugins             PluginConfig              `mapstructure:"plugins"`
+	Encoding            EncodingConfig            `mapstructure:"encoding"`
+	MySQL               MySQLConfig               `mapstructure:"mysql"`
+	MongoDB             MongoDBConfig             `mapstructure:"mongodb"`
+	SQLite              SQLiteConfig              `mapstructure:"sqlite"`
+	OTel                OTelConfig                `mapstructure:"otel"`
+	DuckDB              DuckDBConfig              `mapstructure:"duckdb"`
+	Arrow               ArrowConfig               `mapstructure:"arrow"`
+	GraphQL             GraphQLConfig             `mapstructure:"graphql"`
+	KafkaServer         KafkaServerConfig         `mapstructure:"kafkaserver"`
+	Views               []ViewConfig              `mapstructure:"views"`
+	ClickHouse          ClickHouseConfig          `mapstructure:"clickhouse"`
+	PGWire              PGWireConfig              `mapstructure:"pgwire"`
+	Chain               ChainConfig               `mapstructure:"chain"`
+	Inspector           InspectorConfig           `mapstructure:"inspector"`
+	Schema              SchemaConfig              `mapstructure:"schema"`
+	KafkaConsumer       KafkaConsumerConfig       `mapstructure:"kafka_consumer"`
+	WebhookGateway      WebhookGatewayConfig      `mapstructure:"webhook_gateway"`
+	DetectorMode        string                    `mapstructure:"detector_mode"` // sequential, parallel, or failover (for multi-detector)
+	PipelineName        string                    `mapstructure:"pipeline_name"` // per-pipeline metric label
 }
 
 type OTelConfig struct {
@@ -329,6 +330,10 @@ func Default() Config {
 			FlushInterval: 1 * time.Second,
 			BackoffBase:   5 * time.Second,
 			BackoffCap:    60 * time.Second,
+		},
+		PGWire: PGWireConfig{
+			Addr:       ":5433",
+			BufferSize: 10000,
 		},
 		Embedding: EmbeddingConfig{
 			Model:       "text-embedding-3-small",

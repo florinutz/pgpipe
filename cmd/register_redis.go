@@ -3,7 +3,10 @@
 package cmd
 
 import (
+	"time"
+
 	redisadapter "github.com/florinutz/pgcdc/adapter/redis"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +14,15 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "redis",
 		Description: "Redis cache invalidation / sync",
+		ConfigKey:   "redis",
+		DefaultConfig: func() any {
+			return &config.RedisConfig{
+				Mode:        "invalidate",
+				IDColumn:    "id",
+				BackoffBase: 1 * time.Second,
+				BackoffCap:  30 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

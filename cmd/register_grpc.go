@@ -4,6 +4,7 @@ package cmd
 
 import (
 	grpcadapter "github.com/florinutz/pgcdc/adapter/grpc"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +12,12 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "grpc",
 		Description: "gRPC streaming server",
+		ConfigKey:   "grpc",
+		DefaultConfig: func() any {
+			return &config.GRPCConfig{
+				Addr: ":9090",
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

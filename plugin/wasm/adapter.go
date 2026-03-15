@@ -15,7 +15,7 @@ import (
 )
 
 // WasmAdapter wraps a Wasm plugin as an adapter.Adapter.
-// It also implements adapter.Acknowledger and adapter.DLQAware.
+// It also implements adapter.Acknowledger.
 type WasmAdapter struct {
 	basePlugin
 	dlq   dlq.DLQ

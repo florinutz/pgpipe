@@ -1,3 +1,5 @@
+//go:build !no_metrics
+
 package metrics
 
 import (
@@ -850,5 +852,17 @@ var (
 	DedupCacheSize = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "pgcdc_dedup_cache_size",
 		Help: "Current number of entries in the dedup LRU cache.",
+	})
+
+	// PGWire adapter metrics.
+
+	PGWireQueriesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pgcdc_pgwire_queries_total",
+		Help: "Total number of queries received by the PGWire adapter.",
+	})
+
+	PGWireClientsActive = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "pgcdc_pgwire_clients_active",
+		Help: "Number of active PGWire client connections.",
 	})
 )

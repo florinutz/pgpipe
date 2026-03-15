@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"time"
+
 	"github.com/florinutz/pgcdc/detector/outbox"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -9,6 +12,16 @@ func init() {
 	registry.RegisterDetector(registry.DetectorEntry{
 		Name:        "outbox",
 		Description: "Transactional outbox table polling",
+		ConfigKey:   "outbox",
+		DefaultConfig: func() any {
+			return &config.OutboxConfig{
+				Table:        "pgcdc_outbox",
+				PollInterval: 500 * time.Millisecond,
+				BatchSize:    100,
+				BackoffBase:  1 * time.Second,
+				BackoffCap:   30 * time.Second,
+			}
+		},
 		ViperKeys: [][2]string{
 			{"db", "database_url"},
 			{"outbox-table", "outbox.table"},

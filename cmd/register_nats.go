@@ -3,7 +3,10 @@
 package cmd
 
 import (
+	"time"
+
 	natsadapter "github.com/florinutz/pgcdc/adapter/nats"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +14,16 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "nats",
 		Description: "NATS JetStream publish",
+		ConfigKey:   "nats",
+		DefaultConfig: func() any {
+			return &config.NatsConfig{
+				Subject:     "pgcdc",
+				Stream:      "pgcdc",
+				MaxAge:      24 * time.Hour,
+				BackoffBase: 1 * time.Second,
+				BackoffCap:  30 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

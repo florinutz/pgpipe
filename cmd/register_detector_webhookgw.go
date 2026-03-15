@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/florinutz/pgcdc/detector/webhookgw"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -12,6 +13,12 @@ func init() {
 	registry.RegisterDetector(registry.DetectorEntry{
 		Name:        "webhook-gateway",
 		Description: "Inbound webhook gateway (receives HTTP webhooks from external services)",
+		ConfigKey:   "webhook_gateway",
+		DefaultConfig: func() any {
+			return &config.WebhookGatewayConfig{
+				MaxBodySize: 1024 * 1024,
+			}
+		},
 		Spec: []registry.ParamSpec{
 			{
 				Name:        "webhookgw-source",

@@ -3,7 +3,10 @@
 package cmd
 
 import (
+	"time"
+
 	s3adapter "github.com/florinutz/pgcdc/adapter/s3"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -11,6 +14,18 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "s3",
 		Description: "S3-compatible object storage (JSON Lines / Parquet)",
+		ConfigKey:   "s3",
+		DefaultConfig: func() any {
+			return &config.S3Config{
+				Region:        "us-east-1",
+				Format:        "jsonl",
+				FlushInterval: 1 * time.Minute,
+				FlushSize:     10000,
+				DrainTimeout:  30 * time.Second,
+				BackoffBase:   5 * time.Second,
+				BackoffCap:    60 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

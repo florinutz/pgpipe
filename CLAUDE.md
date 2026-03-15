@@ -1,6 +1,6 @@
 # pgcdc
 
-PostgreSQL, MySQL, MongoDB, and SQLite change data capture (LISTEN/NOTIFY, WAL logical replication, outbox pattern, MySQL binlog, MongoDB Change Streams, SQLite change tables, inbound webhook gateway, Kafka consumer, or NATS consumer) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, gRPC, S3-compatible object storage, a built-in Kafka protocol server (speak Kafka wire protocol directly — no Kafka cluster needed), GraphQL subscriptions, Apache Arrow Flight, DuckDB in-process analytics, ClickHouse, and streaming SQL views (tumbling, sliding, and session window aggregation over CDC events).
+PostgreSQL, MySQL, MongoDB, and SQLite change data capture (LISTEN/NOTIFY, WAL logical replication, outbox pattern, MySQL binlog, MongoDB Change Streams, SQLite change tables, inbound webhook gateway, Kafka consumer, or NATS consumer) streaming to webhooks, SSE, stdout, files, exec processes, PG tables, WebSockets, pgvector embeddings, NATS JetStream, Kafka, Typesense/Meilisearch, Redis, gRPC, S3-compatible object storage, a built-in Kafka protocol server (speak Kafka wire protocol directly — no Kafka cluster needed), GraphQL subscriptions, Apache Arrow Flight, DuckDB in-process analytics, ClickHouse, PG wire protocol gateway (connect with `psql`), and streaming SQL views (tumbling, sliding, and session window aggregation over CDC events). Also embeddable as a Go SDK via the `presets` package.
 
 ## Architecture
 
@@ -19,10 +19,11 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
    webhookgw        |                   ──> Adapter (embedding)   ──> DLQ
    kafka_consumer   |                   ──> Adapter (graphql)     ──> HTTP server
    nats_consumer    |                   ──> Adapter (clickhouse)
-   or sqlite)       |
+   or sqlite)       |                   ──> Adapter (pgwire)      ──> PG wire protocol server
                     |                   ──> Adapter (arrow)       ──> gRPC Flight server
                     |                   ──> Adapter (duckdb)      ──> HTTP query endpoint
-              ingest chan               ──> Adapter (view)        ──> re-inject to bus
+              ingest chan               ──> Adapter (chain)       ──> compress/encrypt ──> terminal
+                                        ──> Adapter (view)        ──> re-inject to bus
                                 subscriber chans (one per adapter, filtered by route)
                                       |
                               Health Checker + Prometheus Metrics
@@ -59,7 +60,7 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 4. Optionally implement `adapter.Drainer` (`Drain(ctx) error`) for graceful shutdown flush (bounded by `shutdown_timeout`)
 5. Optionally implement `adapter.HTTPMountable` (`MountHTTP(r chi.Router)`) if the adapter serves HTTP routes
 6. Create `adapter/<name>/` package
-7. Create `cmd/register_<name>.go` and register via `registry.RegisterAdapter(registry.AdapterEntry{...})` in `init()`, including `BindFlags` and `ViperKeys` callbacks
+7. Create `cmd/register_<name>.go` and register via `registry.RegisterAdapter(registry.AdapterEntry{...})` in `init()`, including `BindFlags`, `ViperKeys`, `DefaultConfig`, and `ConfigKey` callbacks
 8. Add config struct in `internal/config/adapter_config.go`
 9. Add defaults in `Default()` in `internal/config/config.go`
 10. Add metrics instrumentation (`metrics.EventsDelivered.WithLabelValues("<name>").Inc()`)
@@ -94,11 +95,11 @@ Context ──> Pipeline (pgcdc.go orchestrates everything)
 
 ## Build Tags for Slim Binary
 
-`no_kafka`, `no_grpc`, `no_iceberg`, `no_nats`, `no_redis`, `no_plugins`, `no_kafkaserver`, `no_views`, `no_s3`, `no_graphql`, `no_arrow`, `no_duckdb`, `no_sqlite`, `no_clickhouse`
+`no_kafka`, `no_grpc`, `no_iceberg`, `no_nats`, `no_redis`, `no_plugins`, `no_kafkaserver`, `no_views`, `no_s3`, `no_graphql`, `no_arrow`, `no_duckdb`, `no_sqlite`, `no_clickhouse`, `no_pgwire`, `no_metrics`
 
 ## Dependencies
 
-Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter + consumer detector), `twmb/franz-go` (Kafka adapter + consumer detector), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `parquet-go/parquet-go` (Parquet writer for S3/Iceberg), `hamba/avro/v2` (Avro encoding), `go.opentelemetry.io/otel` (OpenTelemetry tracing), `extism/go-sdk` (Wasm plugin runtime), `go-mysql-org/go-mysql` (MySQL binlog replication), `go-sql-driver/mysql` (MySQL driver for schema queries), `go.mongodb.org/mongo-driver/v2` (MongoDB Change Streams detector), `pingcap/tidb/pkg/parser` (SQL parsing for view adapter), `apache/arrow-go` (Arrow Flight adapter), `modernc.org/sqlite` (SQLite detector), `duckdb/duckdb-go/v2` (DuckDB analytics adapter, CGO), `ClickHouse/clickhouse-go/v2` (ClickHouse adapter), `testcontainers-go` (test only).
+Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical replication protocol), `cobra` + `viper` (CLI/config), `chi/v5` (HTTP router), `google/uuid` (UUIDv7), `errgroup` (concurrency), `prometheus/client_golang` (metrics), `coder/websocket` (WebSocket adapter), `nats-io/nats.go` (NATS JetStream adapter + consumer detector), `twmb/franz-go` (Kafka adapter + consumer detector), `redis/go-redis/v9` (Redis adapter), `google.golang.org/grpc` + `google.golang.org/protobuf` (gRPC adapter), `aws/aws-sdk-go-v2` (S3 adapter), `parquet-go/parquet-go` (Parquet writer for S3/Iceberg), `hamba/avro/v2` (Avro encoding), `go.opentelemetry.io/otel` (OpenTelemetry tracing), `extism/go-sdk` (Wasm plugin runtime), `go-mysql-org/go-mysql` (MySQL binlog replication), `go-sql-driver/mysql` (MySQL driver for schema queries), `go.mongodb.org/mongo-driver/v2` (MongoDB Change Streams detector), `pingcap/tidb/pkg/parser` (SQL parsing for view adapter), `apache/arrow-go` (Arrow Flight adapter), `modernc.org/sqlite` (SQLite detector), `duckdb/duckdb-go/v2` (DuckDB analytics adapter, CGO), `ClickHouse/clickhouse-go/v2` (ClickHouse adapter), `jeroenrinzema/psql-wire` (PG wire protocol gateway), `testcontainers-go` (test only).
 
 ## Testing
 
@@ -139,13 +140,14 @@ Direct deps (keep minimal): `pgx/v5` (PG driver), `pglogrepl` (WAL logical repli
 
 ```
 pgcdc.go        Pipeline type (library entry point)
+presets/        SDK preset helpers (WALToWebhook, WALToStdout, etc.)
 cmd/            CLI commands (cobra); register_*.go files wire adapters/detectors into registry
 adapter/
-  adapter.go    Adapter, Deliverer, Acknowledger, Validator, Drainer, Reinjector, HTTPMountable, Batcher interfaces
+  adapter.go    Adapter, Deliverer, Acknowledger, Validator, Drainer, HTTPMountable, Batcher interfaces
   middleware/   Middleware chain for Deliverer adapters (CB, rate-limit, retry, DLQ, tracing, metrics)
   chain/        Link-based preprocessing (compress, encrypt links)
   stdout/ webhook/ sse/ file/ exec/ pgtable/ ws/ embedding/ nats/ kafka/
-  search/ redis/ grpc/ s3/ iceberg/ kafkaserver/ view/ graphql/ arrow/ duckdb/ clickhouse/
+  search/ redis/ grpc/ s3/ iceberg/ kafkaserver/ view/ graphql/ arrow/ duckdb/ clickhouse/ pgwire/
 view/           Streaming SQL engine (parser, AST, tumbling/sliding/session windows, aggregators)
 registry/       Self-registering component registry (AdapterEntry, DetectorEntry, ParamSpec)
 detector/
@@ -185,10 +187,13 @@ testutil/       Test utilities
 ## Key Files
 
 - `pgcdc.go` — Pipeline type, options, Run/RunSnapshot; start here for pipeline wiring changes
-- `cmd/listen.go` — CLI listen command (HTTP servers, SIGHUP handler)
+- `cmd/listen.go` — CLI listen command orchestrator + SIGHUP handler
+- `cmd/listen_flags.go` — All listen command flag registrations and viper bindings
+- `cmd/listen_setup.go` — Detector, adapter, transform, DLQ, and backpressure setup
+- `cmd/listen_http.go` — HTTP server startup (SSE/WS, metrics)
 - `cmd/reload.go` — SIGHUP reload: specToTransform, route merging, atomic wrapperConfig swap
 - `cmd/register_*.go` — One file per adapter/detector; each calls `registry.Register*` in `init()`
-- `adapter/adapter.go` — All adapter interfaces: Adapter, Deliverer, Acknowledger, Validator, Drainer, Reinjector, Traceable
+- `adapter/adapter.go` — All adapter interfaces: Adapter, Deliverer, Acknowledger, Validator, Drainer, HTTPMountable, Batcher
 - `adapter/middleware/middleware.go` — Middleware chain: CB + rate-limit + retry + DLQ + tracing + metrics + ack
 - `detector/detector.go` — Detector interface
 - `registry/registry.go` — AdapterEntry, DetectorEntry; BindFlags, ViperKeys, Create factories
@@ -223,4 +228,10 @@ testutil/       Test utilities
 - `cmd/rewind.go` — Rewind WAL checkpoint to specific LSN, duration ago, or slot beginning
 - `internal/output/summary.go` — Startup config summary banner
 - `internal/config/diff.go` — SIGHUP reload config diffing
+- `adapter/pgwire/pgwire.go` — PG wire protocol gateway adapter (ring buffer + psql-wire server)
+- `adapter/chain/chain.go` — Link-based preprocessing chain (compress, encrypt, batch)
+- `presets/presets.go` — SDK preset helpers: WALToStdout, WALToWebhook, ListenNotifyToStdout, ListenNotifyToWebhook
+- `detector/walreplication/emit.go` — WAL event emission (emitEvent, emitMarker, emitSchemaChange)
+- `detector/walreplication/stream.go` — WAL message loop, heartbeat, incremental snapshots
+- `detector/walreplication/relation.go` — Relation cache, schema diff, slot lag monitor
 - `scenarios/helpers_test.go` — Shared test infra: PG container setup, pipeline wiring helpers

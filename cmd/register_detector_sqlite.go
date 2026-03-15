@@ -7,6 +7,7 @@ import (
 	"time"
 
 	sqlitedetector "github.com/florinutz/pgcdc/detector/sqlite"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -14,6 +15,13 @@ func init() {
 	registry.RegisterDetector(registry.DetectorEntry{
 		Name:        "sqlite",
 		Description: "SQLite change tracking (polling-based, local-first CDC)",
+		ConfigKey:   "sqlite",
+		DefaultConfig: func() any {
+			return &config.SQLiteConfig{
+				PollInterval: 500 * time.Millisecond,
+				BatchSize:    100,
+			}
+		},
 		ViperKeys: [][2]string{
 			{"sqlite-db", "sqlite.db_path"},
 			{"sqlite-poll-interval", "sqlite.poll_interval"},

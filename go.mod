@@ -20,6 +20,7 @@ require (
 	github.com/hamba/avro/v2 v2.31.0
 	github.com/jackc/pglogrepl v0.0.0-20251213150135-2e8d0df862c1
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/jeroenrinzema/psql-wire v0.18.0
 	github.com/nats-io/nats.go v1.49.0
 	github.com/parquet-go/parquet-go v0.27.0
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260219190905-9b9281fa8d6d

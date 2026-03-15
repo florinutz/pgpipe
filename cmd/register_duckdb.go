@@ -6,6 +6,7 @@ import (
 	"time"
 
 	duckdbadapter "github.com/florinutz/pgcdc/adapter/duckdb"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -13,6 +14,15 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "duckdb",
 		Description: "DuckDB in-process analytics database with SQL query endpoint",
+		ConfigKey:   "duckdb",
+		DefaultConfig: func() any {
+			return &config.DuckDBConfig{
+				Path:          ":memory:",
+				Retention:     1 * time.Hour,
+				FlushInterval: 5 * time.Second,
+				FlushSize:     1000,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{

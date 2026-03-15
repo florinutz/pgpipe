@@ -123,6 +123,9 @@ type Pipeline struct {
 
 	// Per-pipeline name for metric labeling.
 	pipelineName string
+
+	// Reinjector adapter names: adapters that produce events back into the bus.
+	reinjectors map[string]bool
 }
 
 // Option configures a Pipeline.
@@ -299,6 +302,19 @@ func WithPipelineName(name string) Option {
 	}
 }
 
+// WithReinjector registers an adapter by name as a reinjector. The pipeline
+// will inject the bus ingest channel into the adapter before starting it.
+// Only the view adapter uses this — it produces VIEW_RESULT events back
+// into the bus.
+func WithReinjector(adapterName string) Option {
+	return func(p *Pipeline) {
+		if p.reinjectors == nil {
+			p.reinjectors = make(map[string]bool)
+		}
+		p.reinjectors[adapterName] = true
+	}
+}
+
 // SchemaStoreAware is implemented by detectors that support schema versioning.
 // When a schema store is set on the pipeline, it is passed to the detector.
 type SchemaStoreAware interface {
@@ -327,26 +343,8 @@ func NewPipeline(det detector.Detector, opts ...Option) *Pipeline {
 		p.health.Register("bus")
 	}
 
-	// Wire tracer and DLQ into adapters.
-	// Deliverer/Batcher adapters get these via middleware/batch runner instead.
-	tracer := p.tracerProvider.Tracer("github.com/florinutz/pgcdc")
 	for _, a := range p.adapters {
 		p.health.Register(a.Name())
-		isMiddlewareManaged := false
-		if _, ok := a.(adapter.Deliverer); ok {
-			isMiddlewareManaged = true
-		}
-		if _, ok := a.(adapter.Batcher); ok {
-			isMiddlewareManaged = true
-		}
-		if !isMiddlewareManaged {
-			if da, ok := a.(adapter.DLQAware); ok && p.dlq != nil {
-				da.SetDLQ(p.dlq)
-			}
-			if ta, ok := a.(adapter.Traceable); ok {
-				ta.SetTracer(tracer)
-			}
-		}
 	}
 	if p.backpressureCtrl != nil {
 		p.health.Register("backpressure")
@@ -548,10 +546,13 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		return p.detector.Start(gCtx, p.bus.Ingest())
 	})
 
-	// Wire Reinjector adapters (e.g. view adapter) before starting.
+	// Wire reinjector adapters (e.g. view adapter) before starting.
 	for _, a := range p.adapters {
-		if r, ok := a.(adapter.Reinjector); ok {
-			r.SetIngestChan(p.bus.Ingest())
+		if p.reinjectors[a.Name()] {
+			type ingestSetter interface{ SetIngestChan(chan<- event.Event) }
+			if r, ok := a.(ingestSetter); ok {
+				r.SetIngestChan(p.bus.Ingest())
+			}
 		}
 	}
 
@@ -849,9 +850,6 @@ func NewSnapshotPipeline(snap *snapshot.Snapshot, opts ...Option) *Pipeline {
 	}
 	for _, a := range p.adapters {
 		p.health.Register(a.Name())
-		if da, ok := a.(adapter.DLQAware); ok && p.dlq != nil {
-			da.SetDLQ(p.dlq)
-		}
 	}
 	p.bus = bus.New(p.busBuffer, p.logger)
 	p.bus.SetMode(p.busMode)

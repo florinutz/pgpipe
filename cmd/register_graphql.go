@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/florinutz/pgcdc/adapter/graphql"
+	"github.com/florinutz/pgcdc/internal/config"
 	"github.com/florinutz/pgcdc/registry"
 )
 
@@ -13,6 +14,14 @@ func init() {
 	registry.RegisterAdapter(registry.AdapterEntry{
 		Name:        "graphql",
 		Description: "GraphQL subscriptions over WebSocket (graphql-transport-ws protocol)",
+		ConfigKey:   "graphql",
+		DefaultConfig: func() any {
+			return &config.GraphQLConfig{
+				Path:              "/graphql",
+				BufferSize:        256,
+				KeepaliveInterval: 15 * time.Second,
+			}
+		},
 		Create: func(ctx registry.AdapterContext) (registry.AdapterResult, error) {
 			cfg := ctx.Cfg
 			return registry.AdapterResult{
