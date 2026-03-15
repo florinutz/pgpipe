@@ -220,6 +220,7 @@ testutil/       Test utilities
 - `cmd/quickstart.go` — Interactive project generator (config, SQL, docker-compose)
 - `cmd/plugin_scaffold.go` — Wasm plugin project scaffolding
 - `cmd/config_diff.go` — YAML config diff command
+- `cmd/rewind.go` — Rewind WAL checkpoint to specific LSN, duration ago, or slot beginning
 - `internal/output/summary.go` — Startup config summary banner
 - `internal/config/diff.go` — SIGHUP reload config diffing
 - `scenarios/helpers_test.go` — Shared test infra: PG container setup, pipeline wiring helpers

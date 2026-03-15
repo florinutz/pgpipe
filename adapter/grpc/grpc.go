@@ -11,6 +11,7 @@ import (
 	pb "github.com/florinutz/pgcdc/adapter/grpc/proto"
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/tracing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -66,7 +67,7 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 
 	ln, err := net.Listen("tcp", a.addr)
 	if err != nil {
-		return fmt.Errorf("grpc listen: %w", err)
+		return &pgcdcerr.GRPCStreamError{Addr: a.addr, Err: fmt.Errorf("listen: %w", err)}
 	}
 
 	srv := grpc.NewServer()
@@ -95,7 +96,7 @@ func (a *Adapter) Start(ctx context.Context, events <-chan event.Event) error {
 	select {
 	case err := <-errCh:
 		if err != nil {
-			return err
+			return &pgcdcerr.GRPCStreamError{Addr: a.addr, Err: fmt.Errorf("serve: %w", err)}
 		}
 	default:
 	}

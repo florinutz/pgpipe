@@ -196,6 +196,42 @@ func TestTypedErrors(t *testing.T) {
 			target: new(*pgcdcerr.RateLimitExceededError),
 			hasErr: false,
 		},
+		{
+			name:   "KafkaPublishError",
+			err:    &pgcdcerr.KafkaPublishError{Topic: "events", Err: cause},
+			target: new(*pgcdcerr.KafkaPublishError),
+			hasErr: true,
+		},
+		{
+			name:   "SearchSyncError",
+			err:    &pgcdcerr.SearchSyncError{Engine: "typesense", Index: "products", Err: cause},
+			target: new(*pgcdcerr.SearchSyncError),
+			hasErr: true,
+		},
+		{
+			name:   "RedisOperationError",
+			err:    &pgcdcerr.RedisOperationError{Operation: "set", Key: "user:1", Err: cause},
+			target: new(*pgcdcerr.RedisOperationError),
+			hasErr: true,
+		},
+		{
+			name:   "GRPCStreamError",
+			err:    &pgcdcerr.GRPCStreamError{Addr: ":9090", Err: cause},
+			target: new(*pgcdcerr.GRPCStreamError),
+			hasErr: true,
+		},
+		{
+			name:   "NatsConsumeError",
+			err:    &pgcdcerr.NatsConsumeError{Stream: "pgcdc", Err: cause},
+			target: new(*pgcdcerr.NatsConsumeError),
+			hasErr: true,
+		},
+		{
+			name:   "KafkaConsumeError",
+			err:    &pgcdcerr.KafkaConsumeError{Topic: "events", Err: cause},
+			target: new(*pgcdcerr.KafkaConsumeError),
+			hasErr: true,
+		},
 	}
 
 	for _, tt := range tests {

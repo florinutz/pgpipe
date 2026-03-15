@@ -177,6 +177,80 @@ func (e *ClickHouseFlushError) Error() string {
 
 func (e *ClickHouseFlushError) Unwrap() error { return e.Err }
 
+// KafkaPublishError indicates that a Kafka publish failed.
+type KafkaPublishError struct {
+	Topic string
+	Err   error
+}
+
+func (e *KafkaPublishError) Error() string {
+	return fmt.Sprintf("kafka publish failed for topic %s: %v", e.Topic, e.Err)
+}
+
+func (e *KafkaPublishError) Unwrap() error { return e.Err }
+
+// SearchSyncError indicates that a search engine sync operation failed.
+type SearchSyncError struct {
+	Engine string
+	Index  string
+	Err    error
+}
+
+func (e *SearchSyncError) Error() string {
+	return fmt.Sprintf("search sync failed for %s index %s: %v", e.Engine, e.Index, e.Err)
+}
+
+func (e *SearchSyncError) Unwrap() error { return e.Err }
+
+// RedisOperationError indicates that a Redis operation failed.
+type RedisOperationError struct {
+	Operation string
+	Key       string
+	Err       error
+}
+
+func (e *RedisOperationError) Error() string {
+	return fmt.Sprintf("redis %s failed for key %s: %v", e.Operation, e.Key, e.Err)
+}
+
+func (e *RedisOperationError) Unwrap() error { return e.Err }
+
+// GRPCStreamError indicates that the gRPC streaming adapter encountered an error.
+type GRPCStreamError struct {
+	Addr string
+	Err  error
+}
+
+func (e *GRPCStreamError) Error() string {
+	return fmt.Sprintf("grpc stream error (addr %s): %v", e.Addr, e.Err)
+}
+
+func (e *GRPCStreamError) Unwrap() error { return e.Err }
+
+// NatsConsumeError indicates that the NATS consumer detector encountered an error.
+type NatsConsumeError struct {
+	Stream string
+	Err    error
+}
+
+func (e *NatsConsumeError) Error() string {
+	return fmt.Sprintf("nats consume error (stream %s): %v", e.Stream, e.Err)
+}
+
+func (e *NatsConsumeError) Unwrap() error { return e.Err }
+
+// KafkaConsumeError indicates that the Kafka consumer detector encountered an error.
+type KafkaConsumeError struct {
+	Topic string
+	Err   error
+}
+
+func (e *KafkaConsumeError) Error() string {
+	return fmt.Sprintf("kafka consume error (topic %s): %v", e.Topic, e.Err)
+}
+
+func (e *KafkaConsumeError) Unwrap() error { return e.Err }
+
 // MySQLReplicationError indicates that the MySQL binlog detector encountered an error.
 type MySQLReplicationError struct {
 	Addr string
@@ -274,3 +348,15 @@ type RateLimitExceededError struct {
 func (e *RateLimitExceededError) Error() string {
 	return fmt.Sprintf("rate limit exceeded for adapter %s", e.Adapter)
 }
+
+// RewindError indicates that a checkpoint rewind operation failed.
+type RewindError struct {
+	SlotName string
+	Err      error
+}
+
+func (e *RewindError) Error() string {
+	return fmt.Sprintf("rewind failed for slot %s: %v", e.SlotName, e.Err)
+}
+
+func (e *RewindError) Unwrap() error { return e.Err }

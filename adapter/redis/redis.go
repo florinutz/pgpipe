@@ -13,6 +13,7 @@ import (
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -138,7 +139,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 				// Any change = DEL
 				if err := rdb.Del(ctx, key).Err(); err != nil {
 					if isConnectionError(err) {
-						return fmt.Errorf("redis del (connection lost): %w", err)
+						return &pgcdcerr.RedisOperationError{Operation: "del", Key: key, Err: err}
 					}
 					a.logger.Warn("redis del failed, skipping", "key", key, "error", err)
 					a.recordDLQ(ctx, ev, err)
@@ -150,7 +151,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 				// sync mode DELETE
 				if err := rdb.Del(ctx, key).Err(); err != nil {
 					if isConnectionError(err) {
-						return fmt.Errorf("redis del (connection lost): %w", err)
+						return &pgcdcerr.RedisOperationError{Operation: "del", Key: key, Err: err}
 					}
 					a.logger.Warn("redis del failed, skipping", "key", key, "error", err)
 					a.recordDLQ(ctx, ev, err)
@@ -193,7 +194,7 @@ func (a *Adapter) run(ctx context.Context, events <-chan event.Event) error {
 				}
 				if err := rdb.Set(ctx, key, data, 0).Err(); err != nil {
 					if isConnectionError(err) {
-						return fmt.Errorf("redis set (connection lost): %w", err)
+						return &pgcdcerr.RedisOperationError{Operation: "set", Key: key, Err: err}
 					}
 					a.logger.Warn("redis set failed, skipping", "key", key, "error", err)
 					a.recordDLQ(ctx, ev, err)

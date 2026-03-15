@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -20,6 +21,7 @@ import (
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 )
 
 const detectorName = "kafka_consumer"
@@ -124,7 +126,7 @@ func (d *Detector) Start(ctx context.Context, events chan<- event.Event) error {
 func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 	client, err := kgo.NewClient(d.opts...)
 	if err != nil {
-		return fmt.Errorf("create kafka consumer client: %w", err)
+		return &pgcdcerr.KafkaConsumeError{Topic: strings.Join(d.topics, ","), Err: fmt.Errorf("create client: %w", err)}
 	}
 	defer client.Close()
 
@@ -146,7 +148,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				)
 				metrics.KafkaConsumerErrors.Inc()
 			}
-			return fmt.Errorf("fetch: %w", errs[0].Err)
+			return &pgcdcerr.KafkaConsumeError{Topic: errs[0].Topic, Err: fmt.Errorf("fetch: %w", errs[0].Err)}
 		}
 
 		fetches.EachRecord(func(record *kgo.Record) {

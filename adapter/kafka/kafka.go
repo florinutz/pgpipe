@@ -323,7 +323,7 @@ func (a *Adapter) handleEvent(ctx context.Context, client *kgo.Client, ev event.
 			}
 			return nil
 		}
-		return pgcdcerr.WrapEvent(produceErr, adapterName, ev)
+		return &pgcdcerr.KafkaPublishError{Topic: topic, Err: produceErr}
 	}
 
 	if a.cb != nil {

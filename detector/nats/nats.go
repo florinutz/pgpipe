@@ -16,6 +16,7 @@ import (
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/reconnect"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 )
 
 const detectorName = "nats_consumer"
@@ -95,13 +96,13 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 
 	nc, err := natsclient.Connect(d.url, opts...)
 	if err != nil {
-		return fmt.Errorf("nats connect: %w", err)
+		return &pgcdcerr.NatsConsumeError{Stream: d.stream, Err: fmt.Errorf("connect: %w", err)}
 	}
 	defer nc.Close()
 
 	js, err := jetstream.New(nc)
 	if err != nil {
-		return fmt.Errorf("jetstream init: %w", err)
+		return &pgcdcerr.NatsConsumeError{Stream: d.stream, Err: fmt.Errorf("jetstream init: %w", err)}
 	}
 
 	consCfg := jetstream.ConsumerConfig{
@@ -115,12 +116,12 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 
 	cons, err := js.CreateOrUpdateConsumer(ctx, d.stream, consCfg)
 	if err != nil {
-		return fmt.Errorf("create consumer: %w", err)
+		return &pgcdcerr.NatsConsumeError{Stream: d.stream, Err: fmt.Errorf("create consumer: %w", err)}
 	}
 
 	iter, err := cons.Messages()
 	if err != nil {
-		return fmt.Errorf("start message iterator: %w", err)
+		return &pgcdcerr.NatsConsumeError{Stream: d.stream, Err: fmt.Errorf("start message iterator: %w", err)}
 	}
 	defer iter.Stop()
 
@@ -138,7 +139,7 @@ func (d *Detector) run(ctx context.Context, events chan<- event.Event) error {
 				return ctx.Err()
 			}
 			metrics.NatsConsumerErrors.Inc()
-			return fmt.Errorf("fetch message: %w", err)
+			return &pgcdcerr.NatsConsumeError{Stream: d.stream, Err: fmt.Errorf("fetch message: %w", err)}
 		}
 
 		ev, err := d.messageToEvent(msg)

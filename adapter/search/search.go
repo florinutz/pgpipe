@@ -20,6 +20,7 @@ import (
 	"github.com/florinutz/pgcdc/event"
 	"github.com/florinutz/pgcdc/internal/backoff"
 	"github.com/florinutz/pgcdc/metrics"
+	"github.com/florinutz/pgcdc/pgcdcerr"
 	"github.com/florinutz/pgcdc/tracing"
 )
 
@@ -454,7 +455,14 @@ func (a *Adapter) doRequest(ctx context.Context, method, url string, body []byte
 			lastErr = fmt.Errorf("search API returned %d", resp.StatusCode)
 			continue
 		}
-		return fmt.Errorf("search API returned %d", resp.StatusCode)
+		return &pgcdcerr.SearchSyncError{
+			Engine: a.engine,
+			Index:  a.index,
+			Err:    fmt.Errorf("search API returned %d", resp.StatusCode),
+		}
 	}
-	return lastErr
+	if lastErr != nil {
+		return &pgcdcerr.SearchSyncError{Engine: a.engine, Index: a.index, Err: lastErr}
+	}
+	return nil
 }
